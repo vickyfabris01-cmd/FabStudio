@@ -1,0 +1,22 @@
+# FabStudio API (Cloudflare Worker). See docs/CONNECTIONS.md, section 2.
+name = "fabstudio-api"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# R2 bucket binding. The bucket must exist first (CONNECTIONS.md 2.2).
+# The name on the right must match the bucket you created, the binding name must stay PRIVATE_BUCKET.
+[[r2_buckets]]
+binding = "PRIVATE_BUCKET"
+bucket_name = "fabstudio-private"
+
+[vars]
+# ACTION: your Supabase Project URL (CONNECTIONS.md 1.3).
+SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co"
+# ACTION: your Supabase anon / publishable key (CONNECTIONS.md 1.3). Safe to be public.
+SUPABASE_ANON_KEY = "YOUR-ANON-OR-PUBLISHABLE-KEY"
+# ACTION: your own Supabase user ID (CONNECTIONS.md 1.5). Only this user may upload.
+OWNER_USER_ID = "00000000-0000-0000-0000-000000000000"
+# ACTION: where FabStudio is served from, comma-separated, no trailing slash (CONNECTIONS.md 2.5).
+ALLOWED_ORIGINS = "https://YOUR-SITE.pages.dev,http://localhost:8788"
+# Largest single file accepted, in MB.
+MAX_UPLOAD_MB = "200"
