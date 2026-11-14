@@ -1,16 +1,18 @@
-// FabStudio: private, offline-first poetry workspace (Phase 1).
+// FabStudio: private, offline-first poetry workspace.
+// Tabs: Studio (bake, upload, publish), Poems (write, record, background tune), Settings.
 import { db, uid, now } from './db.js';
 import * as auth from './auth.js';
 import { syncNow, syncSoon, startSyncLoop, getSyncState, getBlob } from './sync.js';
 import { startCapture, recoverOrphans, isRecording } from './recorder.js';
-import { preview, bake } from './mixer.js';
-import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton } from './ui.js';
+import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, fileChip, popMenu, openModal, micIcon, dotsIcon, stopIcon } from './ui.js';
 import { publishListView, itemView } from './publish.js';
+import { bakerView, openBakeModal } from './baker.js';
 
 const app = document.getElementById('app');
-const state = { tab: 'poems', poemId: null, itemId: null, prefill: {} };
+const state = { tab: 'poems', poemId: null, itemId: null, prefill: {}, bake: null };
 let viewToken = 0;
 let editorFlush = null;
+let disposeView = null;
 let paintPill = null;
 let lastSeenSync = null;
 
@@ -22,6 +24,7 @@ const setPrefs = (p) => localStorage.setItem('fabstudio.prefs', JSON.stringify({
 const newest = (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt);
 const firstLine = (p) => (p.stanzas?.[0] || '').split('\n')[0];
 const poemName = (p) => p.title || firstLine(p) || 'Untitled';
+const recordingName = (iso) => `Recording ${fmtDate(iso)}`;
 
 // Deleting keeps a small tombstone so the deletion syncs; content and audio are removed.
 async function softDelete(table, id) {
@@ -33,6 +36,25 @@ async function softDelete(table, id) {
   syncSoon();
 }
 
+// A poem goes with its recordings and baked audio. Items already in Studio stay.
+async function deletePoem(id) {
+  for (const b of await db.bakes.where('poemId').equals(id).toArray()) if (!b.deletedAt) await softDelete('bakes', b.id);
+  for (const c of await db.captures.where('poemId').equals(id).toArray()) if (!c.deletedAt) await softDelete('captures', c.id);
+  await softDelete('poems', id);
+}
+
+// Recordings made before this layout (the old Ideas tab) get a poem each, so they are still reachable.
+async function migrateLooseRecordings() {
+  const loose = (await db.captures.toArray()).filter((c) => !c.deletedAt && c.status === 'done' && !c.poemId);
+  for (const c of loose) {
+    const pid = uid();
+    const t = now();
+    await db.poems.put({ id: pid, title: recordingName(c.createdAt), stanzas: [], tuneId: null, tuneVolume: 0.5, createdAt: c.createdAt, updatedAt: t, dirty: 1 });
+    await db.captures.update(c.id, { poemId: pid, updatedAt: t, dirty: 1 });
+  }
+  if (loose.length) syncSoon();
+}
+
 /* ---------- boot ---------- */
 async function boot() {
   if ('serviceWorker' in navigator) {
@@ -40,6 +62,7 @@ async function boot() {
   }
   await recoverOrphans();
   if (!(await auth.ownerInfo())) return renderLogin();
+  await migrateLooseRecordings();
   renderShell();
   startSyncLoop();
 }
@@ -70,7 +93,7 @@ function syncText(s) {
 
 function renderShell() {
   const pill = h('button', { class: 'pill', onclick: () => goTab('settings') });
-  const tabs = [['poems', 'Poems'], ['ideas', 'Ideas'], ['tunes', 'Tunes'], ['publish', 'Publish'], ['settings', 'Settings']];
+  const tabs = [['studio', 'Studio'], ['poems', 'Poems'], ['settings', 'Settings']];
   app.replaceChildren(
     h('header', { class: 'bar' }, h('span', { class: 'brand' }, 'FabStudio'), pill),
     h('main', { id: 'view' }),
@@ -84,7 +107,7 @@ function renderShell() {
     // Refresh list screens after a finished sync, unless the person is in the middle of something.
     if (s.state === 'idle' && s.last && s.last !== lastSeenSync) {
       lastSeenSync = s.last;
-      const busy = state.poemId || state.itemId || isRecording() || document.activeElement?.matches?.('select,input,textarea');
+      const busy = state.poemId || state.itemId || state.bake || isRecording() || document.querySelector('.modal-back') || document.activeElement?.matches?.('select,input,textarea');
       if (!busy) renderView();
     }
   };
@@ -98,24 +121,31 @@ function goTab(k) {
   state.tab = k;
   state.poemId = null;
   state.itemId = null;
+  state.bake = null;
   renderView();
 }
-const openPoem = (id) => { state.tab = 'poems'; state.poemId = id; state.itemId = null; renderView(); };
-const openItem = (id, prefill = {}) => { state.tab = 'publish'; state.itemId = id; state.prefill = prefill; state.poemId = null; renderView(); };
+const openPoem = (id) => { state.tab = 'poems'; state.poemId = id; state.itemId = null; state.bake = null; renderView(); };
+const openItem = (id, prefill = {}) => { state.tab = 'studio'; state.itemId = id; state.prefill = prefill; state.poemId = null; state.bake = null; renderView(); };
 const nav = {
   open: openItem,
-  back: () => { state.itemId = null; renderView(); },
+  back: () => { state.itemId = null; state.bake = null; renderView(); },
   refresh: () => renderView(),
+  bake: () => { state.tab = 'studio'; state.itemId = null; state.poemId = null; state.bake = { poemId: null }; renderView(); },
+  pickBake: (id) => { state.bake = { poemId: id }; renderView(); },
 };
 
 async function renderView() {
   const token = ++viewToken;
-  const builders = { poems: poemsView, ideas: ideasView, tunes: tunesView, publish: () => publishListView(nav), settings: settingsView };
+  const builders = { poems: poemsView, studio: () => publishListView(nav), settings: settingsView };
   const view = state.poemId ? await editorView(state.poemId)
+    : state.bake ? await bakerView({ poemId: state.bake.poemId, nav })
     : state.itemId ? await itemView(state.itemId, nav, state.prefill)
-    : await builders[state.tab]();
-  if (token !== viewToken) return;
+    : await (builders[state.tab] || poemsView)();
+  if (token !== viewToken) { view._dispose?.(); return; }
+  try { disposeView?.(); } catch { /* ignore */ }
+  disposeView = view._dispose || null;
   editorFlush = view._flush || null;
+  document.body.classList.toggle('baking', !!state.bake?.poemId);
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === state.tab));
   document.getElementById('view').replaceChildren(view);
   window.scrollTo(0, 0);
@@ -126,67 +156,112 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) edito
 window.addEventListener('pagehide', () => editorFlush?.());
 
 /* ---------- shared pieces ---------- */
-function recorderPanel(poemId, onDone) {
-  const btn = h('button', { class: 'btn rec' }, '● Record idea');
-  const time = h('span', { class: 'time' });
+// The round record button. It records into the poem that getPoemId() names, then calls onDone(captureId, poemId).
+function recFab(getPoemId, onDone) {
+  const btn = h('button', { class: 'fab rec', type: 'button', 'aria-label': 'Record' });
+  const idle = () => { btn.classList.remove('live'); btn.replaceChildren(micIcon()); };
+  idle();
   let session = null;
   let tick = null;
+  let pid = null;
   btn.onclick = async () => {
     if (session) {
       clearInterval(tick);
       btn.disabled = true;
       const s = session;
       session = null;
-      const capId = await s.stop();
+      try {
+        const capId = await s.stop();
+        syncSoon();
+        await onDone(capId, pid);
+      } catch (e) { toast('Could not save the recording: ' + (e.message || e)); }
       btn.disabled = false;
-      btn.textContent = '● Record idea';
-      btn.classList.remove('live');
-      time.textContent = '';
-      syncSoon();
-      onDone?.(capId);
+      idle();
       return;
     }
+    if (!navigator.mediaDevices?.getUserMedia) return toast('Recording is not available in this browser.');
+    pid = getPoemId();
     try {
       const p = prefs();
-      session = await startCapture({ poemId, deviceId: p.deviceId, raw: p.raw });
+      session = await startCapture({ poemId: pid, deviceId: p.deviceId, raw: p.raw });
     } catch (e) {
       return toast('Microphone unavailable: ' + (e.message || e.name));
     }
     const t0 = Date.now();
-    btn.textContent = '■ Stop and save';
+    const label = h('span', { class: 'fab-t' }, '0:00');
     btn.classList.add('live');
-    tick = setInterval(() => { time.textContent = fmtDur((Date.now() - t0) / 1000); }, 250);
+    btn.replaceChildren(stopIcon(), label);
+    tick = setInterval(() => { label.textContent = fmtDur((Date.now() - t0) / 1000); }, 250);
   };
-  return h('div', { class: 'recorder' }, btn, time);
+  return btn;
+}
+
+async function addTune(file) {
+  if (file.size > 60 * 1048576) { toast(`${file.name} is over 60 MB.`); return null; }
+  const id = uid();
+  const t = now();
+  const mime = file.type || 'audio/mpeg';
+  const duration = await probeDuration(file);
+  await db.tunes.put({
+    id, title: file.name.replace(/\.[^.]+$/, ''), mime, duration, rightsNote: '', blob: file,
+    r2Key: `tunes/${id}.${extFor(mime, file.name)}`, createdAt: t, updatedAt: t, dirty: 1, blobPending: 1,
+  });
+  syncSoon();
+  return id;
 }
 
 /* ---------- Poems ---------- */
 async function poemsView() {
   const rows = (await db.poems.toArray()).filter((p) => !p.deletedAt).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const fab = recFab(() => uid(), async (capId, pid) => {
+    const cap = await db.captures.get(capId);
+    if (!cap) return toast('Nothing was recorded.');
+    const t = now();
+    await db.poems.put({ id: pid, title: recordingName(cap.createdAt), stanzas: [], tuneId: null, tuneVolume: 0.5, createdAt: t, updatedAt: t, dirty: 1 });
+    syncSoon();
+    toast('Saved in a new poem.');
+    renderView();
+  });
   return h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Poems'), h('button', { class: 'btn primary', onclick: () => openPoem(uid()) }, 'New poem')),
     rows.length
-      ? h('ul', { class: 'list' }, rows.map((p) => h('li', { class: 'item', onclick: () => openPoem(p.id) },
-          h('div', { class: 'grow' }, h('div', { class: 'title' }, poemName(p)), h('div', { class: 'sub' }, `${p.stanzas?.length || 0} stanzas, edited ${fmtDate(p.updatedAt)}`)),
-          h('span', { class: 'dot', 'data-pending': p.dirty ? '1' : '0', title: p.dirty ? 'Waiting to sync' : 'Synced' }))))
-      : h('p', { class: 'empty' }, 'No poems yet. Tap New poem and start writing. It saves whenever you pause.'));
+      ? h('ul', { class: 'list' }, rows.map((p) => {
+          const more = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Poem actions' }, dotsIcon());
+          more.onclick = (e) => {
+            e.stopPropagation();
+            popMenu(more, [
+              { label: 'Open', onclick: () => openPoem(p.id) },
+              { label: 'Delete poem', danger: true, onclick: async () => {
+                if (isRecording()) return toast('Stop the recording first.');
+                if (!confirm('Delete this poem with its recordings and baked audio?')) return;
+                await deletePoem(p.id);
+                renderView();
+              } },
+            ]);
+          };
+          return h('li', { class: 'item', onclick: () => openPoem(p.id) },
+            h('div', { class: 'grow' }, h('div', { class: 'title' }, poemName(p)), h('div', { class: 'sub' }, `${p.stanzas?.length || 0} stanzas, edited ${fmtDate(p.updatedAt)}`)),
+            h('span', { class: 'dot', 'data-pending': p.dirty ? '1' : '0', title: p.dirty ? 'Waiting to sync' : 'Synced' }),
+            h('span', { class: 'menuwrap' }, more));
+        }))
+      : h('p', { class: 'empty' }, 'No poems yet. Tap New poem and start writing, or tap the red button and speak. It saves whenever you pause.'),
+    fab);
 }
 
 async function editorView(id) {
   const existing = await db.poems.get(id);
   let created = !!existing;
-  const base = existing || { id, title: '', stanzas: [], tuneId: null, tuneVolume: 0.3, createdAt: now() };
-  const tunes = (await db.tunes.toArray()).filter((t) => !t.deletedAt);
+  const base = existing || { id, title: '', stanzas: [], tuneId: null, tuneVolume: 0.5, createdAt: now() };
+  let tuneId = base.tuneId || null;
 
   const title = h('input', { class: 'poem-title', placeholder: 'Title', value: base.title || '', 'aria-label': 'Title' });
   const body = h('textarea', { class: 'poem-body', placeholder: 'Write here. Leave a blank line between stanzas.', 'aria-label': 'Poem text' });
   body.value = (base.stanzas || []).join('\n\n');
   const status = h('span', { class: 'status' }, existing ? 'Saved' : '');
-  const tuneSel = h('select', { 'aria-label': 'Background tune' },
-    h('option', { value: '' }, 'No background tune'),
-    tunes.map((t) => h('option', { value: t.id }, t.title || 'Untitled tune')));
-  tuneSel.value = base.tuneId || '';
-  const vol = h('input', { type: 'range', min: 0, max: 100, value: Math.round((base.tuneVolume ?? 0.3) * 100), 'aria-label': 'Tune volume' });
+  const filesBox = h('div', { class: 'files' });
+
+  // The page grows with the text, and a blank area below it always keeps the page scrollable.
+  const grow = () => { body.style.height = 'auto'; body.style.height = body.scrollHeight + 'px'; };
 
   let timer = null;
   const save = async () => {
@@ -197,192 +272,154 @@ async function editorView(id) {
     if (!created && !t && !stanzas.length) return;
     const current = (await db.poems.get(id)) || base;
     created = true;
-    await db.poems.put({ ...current, title: t, stanzas, tuneId: tuneSel.value || null, tuneVolume: Number(vol.value) / 100, updatedAt: now(), dirty: 1 });
+    await db.poems.put({ ...current, title: t, stanzas, tuneId, tuneVolume: current.tuneVolume ?? 0.5, updatedAt: now(), dirty: 1 });
     status.textContent = 'Saved';
     syncSoon();
   };
   const queue = () => { status.textContent = 'Saving…'; clearTimeout(timer); timer = setTimeout(save, 800); };
   for (const el of [title, body]) { el.addEventListener('input', queue); el.addEventListener('blur', save); }
-  tuneSel.addEventListener('change', queue);
-  vol.addEventListener('input', queue);
+  body.addEventListener('input', grow);
+  window.addEventListener('resize', grow);
+  setTimeout(grow, 60);
 
-  // Voice picker
-  const voiceSel = h('select', { 'aria-label': 'Voice recording' });
-  const fillVoices = async (pick) => {
-    const caps = (await db.captures.toArray()).filter((c) => !c.deletedAt && c.status === 'done').sort(newest);
-    voiceSel.replaceChildren(...(caps.length
-      ? caps.map((c) => h('option', { value: c.id }, `${fmtDate(c.createdAt)}, ${fmtDur(c.duration)}${c.poemId === id ? ', this poem' : ''}`))
-      : [h('option', { value: '' }, 'No recordings yet')]));
-    voiceSel.value = pick || (caps.find((c) => c.poemId === id) || caps[0])?.id || '';
+  /* files of this poem, shown under the title */
+  const fillFiles = async () => {
+    const tune = tuneId ? await db.tunes.get(tuneId) : null;
+    const caps = (await db.captures.where('poemId').equals(id).toArray()).filter((c) => !c.deletedAt && c.status === 'done').sort(newest);
+    const bakes = (await db.bakes.where('poemId').equals(id).toArray()).filter((b) => !b.deletedAt).sort(newest);
+    const chips = [];
+    if (tune && !tune.deletedAt) chips.push(fileChip({ label: tune.title || 'Tune', sub: fmtDur(tune.duration), getBlob: () => getBlob('tunes', tune), onDelete: removeTune }));
+    for (const c of caps) chips.push(fileChip({ label: 'Voice', sub: fmtDur(c.duration), getBlob: () => getBlob('captures', c), onDelete: () => removeFile('captures', c.id, 'this recording') }));
+    for (const b of bakes) chips.push(fileChip({ label: title.value.trim() || poemName(base), sub: 'Baked ' + fmtDur(b.duration), onOpen: () => openBakeModal(b.id, { onChange: fillFiles }), onDelete: () => removeFile('bakes', b.id, 'this baked file') }));
+    filesBox.replaceChildren(...chips);
   };
-
-  // Baked files for this poem
-  const bakesBox = h('div', { class: 'bakes' });
-  const fillBakes = async () => {
-    const rows = (await db.bakes.where('poemId').equals(id).toArray()).filter((b) => !b.deletedAt).sort(newest);
-    bakesBox.replaceChildren(rows.length
-      ? h('ul', { class: 'list compact' }, rows.map((b) => h('li', { class: 'item' },
-          playButton(() => getBlob('bakes', b)),
-          h('div', { class: 'grow' }, h('div', { class: 'title' }, `Baked ${fmtDate(b.createdAt)}`), h('div', { class: 'sub' }, `${fmtDur(b.duration)}${b.blobPending ? ', waiting to upload' : ''}`)),
-          h('button', { class: 'btn small', onclick: () => { if (isRecording()) return toast('Stop the recording first.'); openItem(crypto.randomUUID(), { bakeId: b.id }); } }, 'Publish'),
-          h('button', { class: 'btn small danger', onclick: async () => { if (!confirm('Delete this baked audio?')) return; await softDelete('bakes', b.id); fillBakes(); } }, 'Delete'))))
-      : h('p', { class: 'muted small' }, 'Nothing baked yet.'));
-  };
-
-  async function materials() {
-    const cap = voiceSel.value ? await db.captures.get(voiceSel.value) : null;
-    if (!cap) { toast('Record or pick a voice recording first.'); return null; }
-    const voice = await getBlob('captures', cap);
-    if (!voice) { toast('That recording is not on this device yet. Connect to download it.'); return null; }
-    let tune = null;
-    let tuneRow = null;
-    if (tuneSel.value) {
-      tuneRow = await db.tunes.get(tuneSel.value);
-      tune = tuneRow ? await getBlob('tunes', tuneRow) : null;
-      if (!tune) { toast('The tune is not on this device yet. Connect to download it.'); return null; }
-    }
-    return { cap, voice, tune, tuneRow };
+  async function removeFile(table, fid, what) {
+    if (!confirm(`Delete ${what}?`)) return;
+    await softDelete(table, fid);
+    await fillFiles();
+  }
+  async function setTune(tid) {
+    created = true;
+    tuneId = tid;
+    await save();
+    await fillFiles();
+  }
+  async function removeTune() {
+    const others = (await db.poems.toArray()).filter((p) => !p.deletedAt && p.id !== id && p.tuneId === tuneId);
+    if (others.length) { if (!confirm('Other poems use this tune too. Remove it from this poem only?')) return; }
+    else if (!confirm('Delete this background tune?')) return;
+    const old = tuneId;
+    tuneId = null;
+    await save();
+    if (!others.length) await softDelete('tunes', old);
+    await fillFiles();
   }
 
-  const progress = h('progress', { max: 1, value: 0, hidden: true });
-  let prev = null;
-  const prevBtn = h('button', {
-    class: 'btn',
-    onclick: async () => {
-      if (prev) return prev.stop();
-      const m = await materials();
-      if (!m) return;
-      prevBtn.textContent = 'Stop';
-      try {
-        prev = await preview(m.voice, m.tune, Number(vol.value) / 100, () => { prev = null; prevBtn.textContent = 'Preview'; });
-      } catch (e) { prev = null; prevBtn.textContent = 'Preview'; toast('Preview failed: ' + (e.message || e)); }
-    },
-  }, 'Preview');
+  /* upload background music: pick one already uploaded, or upload a new one */
+  const chooseTune = () => {
+    const box = h('div', { class: 'stack' });
+    const m = openModal(h('h3', {}, 'Background music'), box);
+    const home = () => box.replaceChildren(
+      h('button', { class: 'btn', onclick: existingList }, 'Pick existing'),
+      h('button', { class: 'btn primary', onclick: uploadNew }, 'Upload new'),
+      h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'));
+    const uploadNew = () => {
+      const input = h('input', { type: 'file', accept: 'audio/*' });
+      input.onchange = async () => {
+        const f = input.files[0];
+        if (!f) return;
+        const tid = await addTune(f);
+        if (tid) { await setTune(tid); toast('Background music added.'); }
+      };
+      input.click();
+      m.close();
+    };
+    const existingList = async () => {
+      const tunes = (await db.tunes.toArray()).filter((t) => !t.deletedAt).sort(newest);
+      box.replaceChildren(
+        tunes.length
+          ? h('ul', { class: 'list compact' }, tunes.map((t) => h('li', { class: 'item' },
+              h('div', { class: 'grow' }, h('div', { class: 'title' }, t.title || 'Untitled tune'), h('div', { class: 'sub' }, fmtDur(t.duration))),
+              h('button', { class: 'btn small primary', onclick: async () => { m.close(); await setTune(t.id); toast('Background music set.'); } }, 'Use'))))
+          : h('p', { class: 'muted' }, 'No music uploaded yet. Use Upload new.'),
+        h('button', { class: 'btn', onclick: home }, 'Back'));
+    };
+    home();
+  };
 
-  const bakeBtn = h('button', {
-    class: 'btn primary',
-    onclick: async () => {
-      if (isRecording()) return toast('Stop the recording first.');
-      const m = await materials();
-      if (!m) return;
-      created = true;
-      await save();
-      bakeBtn.disabled = prevBtn.disabled = true;
-      progress.hidden = false;
-      progress.value = 0;
-      toast('Baking runs in real time. Keep this screen open.');
-      try {
-        const out = await bake(m.voice, m.tune, Number(vol.value) / 100, (p) => { progress.value = p; });
-        const bid = uid();
-        const t = now();
-        await db.bakes.put({
-          id: bid, poemId: id, captureId: m.cap.id, tuneId: m.tuneRow?.id || null, tuneVolume: Number(vol.value) / 100,
-          mime: out.mime, duration: out.duration, blob: out.blob, r2Key: `bakes/${bid}.${extFor(out.mime)}`,
-          createdAt: t, updatedAt: t, dirty: 1, blobPending: 1,
-        });
-        toast('Baked. It uploads when you are online.');
-        syncSoon();
-        await fillBakes();
-      } catch (e) { toast('Baking failed: ' + (e.message || e)); }
-      finally { bakeBtn.disabled = prevBtn.disabled = false; progress.hidden = true; }
-    },
-  }, 'Bake into one file');
+  /* manage files: list, play, delete; tune name and rights note */
+  const manageFiles = async () => {
+    const box = h('div', { class: 'stack' });
+    const m = openModal(h('h3', {}, 'Files in this poem'), box, h('button', { class: 'btn', onclick: () => m.close() }, 'Close'));
+    const paint = async () => {
+      const tune = tuneId ? await db.tunes.get(tuneId) : null;
+      const caps = (await db.captures.where('poemId').equals(id).toArray()).filter((c) => !c.deletedAt && c.status === 'done').sort(newest);
+      const bakes = (await db.bakes.where('poemId').equals(id).toArray()).filter((b) => !b.deletedAt).sort(newest);
+      const rows = [];
+      const delBtn = (fn) => h('button', { class: 'btn small danger', onclick: async () => { await fn(); await paint(); await fillFiles(); } }, 'Delete');
+      if (tune && !tune.deletedAt) {
+        const edit = (patch) => db.tunes.update(tune.id, { ...patch, updatedAt: now(), dirty: 1 }).then(() => syncSoon());
+        const name = h('input', { class: 'inline', value: tune.title || '', 'aria-label': 'Tune name', onchange: () => edit({ title: name.value.trim() }) });
+        const rights = h('input', { class: 'inline', value: tune.rightsNote || '', placeholder: 'Rights note: who owns it, licence', 'aria-label': 'Rights note', onchange: () => edit({ rightsNote: rights.value.trim() }) });
+        rows.push(h('li', { class: 'item col' },
+          h('div', { class: 'row' }, playButton(() => getBlob('tunes', tune)), h('div', { class: 'grow' }, name, h('div', { class: 'sub' }, `Background tune, ${fmtDur(tune.duration)}`)), delBtn(removeTune)),
+          rights));
+      }
+      for (const c of caps) rows.push(h('li', { class: 'item' }, playButton(() => getBlob('captures', c)),
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, 'Voice recording'), h('div', { class: 'sub' }, `${fmtDur(c.duration)}, ${fmtDate(c.createdAt)}`)),
+        delBtn(() => removeFile('captures', c.id, 'this recording'))));
+      for (const b of bakes) rows.push(h('li', { class: 'item' }, playButton(() => getBlob('bakes', b)),
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, 'Baked audio'), h('div', { class: 'sub' }, `${fmtDur(b.duration)}, ${fmtDate(b.createdAt)}`)),
+        delBtn(() => removeFile('bakes', b.id, 'this baked file'))));
+      box.replaceChildren(rows.length ? h('ul', { class: 'list compact' }, rows) : h('p', { class: 'muted' }, 'No files in this poem yet.'));
+    };
+    await paint();
+  };
+
+  const fab = recFab(() => id, async () => {
+    if (!title.value.trim()) title.value = recordingName(now());
+    created = true;
+    await save();
+    await fillFiles();
+  });
 
   const back = async () => {
     if (isRecording()) return toast('Stop the recording first.');
-    prev?.stop();
     await save();
     state.poemId = null;
     renderView();
   };
 
   const del = async () => {
+    if (isRecording()) return toast('Stop the recording first.');
     if (!created) { state.poemId = null; return renderView(); }
-    if (!confirm('Delete this poem and its baked audio? Your voice ideas are kept.')) return;
-    for (const b of await db.bakes.where('poemId').equals(id).toArray()) await softDelete('bakes', b.id);
-    await db.captures.where('poemId').equals(id).modify((c) => { c.poemId = null; c.updatedAt = now(); c.dirty = 1; });
-    await softDelete('poems', id);
+    if (!confirm('Delete this poem with its recordings and baked audio?')) return;
+    await deletePoem(id);
     state.poemId = null;
     renderView();
   };
 
+  const more = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Poem actions' }, dotsIcon());
+  more.onclick = () => popMenu(more, [
+    { label: 'Record', onclick: () => fab.click() },
+    { label: 'Upload background music', onclick: chooseTune },
+    { label: 'Manage files', onclick: manageFiles },
+    { label: 'Copy text', onclick: async () => {
+      try { await navigator.clipboard.writeText([title.value.trim(), body.value.trim()].filter(Boolean).join('\n\n')); toast('Copied.'); }
+      catch { toast('Could not copy.'); }
+    } },
+    { label: 'Delete poem', danger: true, onclick: del },
+  ]);
+
   const el = h('section', { class: 'view editor' },
-    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', onclick: back }, '← Poems'), status),
-    title, body,
-    h('div', { class: 'panel' },
-      h('h3', {}, 'Background tune'), tuneSel,
-      h('label', { class: 'row' }, h('span', {}, 'Volume'), vol),
-      tunes.length ? null : h('p', { class: 'muted small' }, 'Add tunes in the Tunes tab.')),
-    h('div', { class: 'panel' },
-      h('h3', {}, 'Voice'),
-      recorderPanel(id, (capId) => fillVoices(capId)),
-      voiceSel,
-      h('div', { class: 'row' }, prevBtn, bakeBtn),
-      progress, bakesBox),
-    h('button', { class: 'btn danger wide', onclick: del }, 'Delete poem'));
+    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', onclick: back }, '← Poems'), h('span', { class: 'grow status', style: 'text-align:right' }, status), h('span', { class: 'menuwrap' }, more)),
+    title, filesBox, body,
+    h('div', { class: 'spacer', 'aria-hidden': 'true' }),
+    fab);
   el._flush = save;
-  await fillVoices();
-  await fillBakes();
+  el._dispose = () => window.removeEventListener('resize', grow);
+  await fillFiles();
   return el;
-}
-
-/* ---------- Ideas ---------- */
-async function ideasView() {
-  const caps = (await db.captures.toArray()).filter((c) => !c.deletedAt && c.status === 'done').sort(newest);
-  const poems = (await db.poems.toArray()).filter((p) => !p.deletedAt).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-  const list = caps.length
-    ? h('ul', { class: 'list' }, caps.map((c) => {
-        const link = h('select', {
-          class: 'inline', 'aria-label': 'Linked poem',
-          onchange: async () => { await db.captures.update(c.id, { poemId: link.value || null, updatedAt: now(), dirty: 1 }); syncSoon(); },
-        }, h('option', { value: '' }, 'Not linked to a poem'), poems.map((p) => h('option', { value: p.id }, poemName(p))));
-        link.value = c.poemId || '';
-        const where = c.blob ? fmtSize(c.blob.size) : 'in the cloud';
-        return h('li', { class: 'item col' },
-          h('div', { class: 'row' },
-            playButton(() => getBlob('captures', c)),
-            h('div', { class: 'grow' }, h('div', { class: 'title' }, fmtDate(c.createdAt)), h('div', { class: 'sub' }, `${fmtDur(c.duration)}, ${where}${c.blobPending ? ', waiting to upload' : ''}`)),
-            h('button', { class: 'btn small danger', onclick: async () => { if (!confirm('Delete this recording?')) return; await softDelete('captures', c.id); renderView(); } }, 'Delete')),
-          link);
-      }))
-    : h('p', { class: 'empty' }, 'No ideas yet. Tap Record the moment a line comes to you.');
-  return h('section', { class: 'view' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Ideas')), recorderPanel(null, () => renderView()), list);
-}
-
-/* ---------- Tunes ---------- */
-async function addTune(file) {
-  if (file.size > 60 * 1048576) return toast(`${file.name} is over 60 MB.`);
-  const id = uid();
-  const t = now();
-  const mime = file.type || 'audio/mpeg';
-  const duration = await probeDuration(file);
-  await db.tunes.put({
-    id, title: file.name.replace(/\.[^.]+$/, ''), mime, duration, rightsNote: '', blob: file,
-    r2Key: `tunes/${id}.${extFor(mime, file.name)}`, createdAt: t, updatedAt: t, dirty: 1, blobPending: 1,
-  });
-  syncSoon();
-}
-
-async function tunesView() {
-  const rows = (await db.tunes.toArray()).filter((t) => !t.deletedAt).sort(newest);
-  const input = h('input', {
-    type: 'file', accept: 'audio/*', multiple: true, hidden: true,
-    onchange: async () => { for (const f of input.files) await addTune(f); input.value = ''; renderView(); },
-  });
-  const edit = (id, patch) => db.tunes.update(id, { ...patch, updatedAt: now(), dirty: 1 }).then(() => syncSoon());
-  return h('section', { class: 'view' },
-    h('div', { class: 'toolbar' }, h('h2', {}, 'Tunes'), h('button', { class: 'btn primary', onclick: () => input.click() }, 'Add tunes'), input),
-    h('p', { class: 'muted small' }, 'Upload a tune once and reuse it in any poem. Only add music you have the rights to use.'),
-    rows.length
-      ? h('ul', { class: 'list' }, rows.map((t) => {
-          const name = h('input', { class: 'inline', value: t.title || '', 'aria-label': 'Tune name', onchange: () => edit(t.id, { title: name.value.trim() }) });
-          const rights = h('input', { class: 'inline', value: t.rightsNote || '', placeholder: 'Rights note: who owns it, licence', 'aria-label': 'Rights note', onchange: () => edit(t.id, { rightsNote: rights.value.trim() }) });
-          return h('li', { class: 'item col' },
-            h('div', { class: 'row' }, playButton(() => getBlob('tunes', t)), h('div', { class: 'grow' }, name, h('div', { class: 'sub' }, `${fmtDur(t.duration)}, ${t.blob ? fmtSize(t.blob.size) : 'in the cloud'}${t.blobPending ? ', waiting to upload' : ''}`)),
-              h('button', { class: 'btn small danger', onclick: async () => { if (!confirm('Delete this tune? Poems using it will have no tune.')) return; await softDelete('tunes', t.id); renderView(); } }, 'Delete')),
-            rights);
-        }))
-      : h('p', { class: 'empty' }, 'No tunes yet. Tap Add tunes and pick audio files from your phone.'));
 }
 
 /* ---------- Settings ---------- */
@@ -424,28 +461,31 @@ async function settingsView() {
   return h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Settings')),
     reauth,
+    h('div', { class: 'panel' }, h('h3', {}, 'Sync'),
+      h('p', {}, syncText(s)),
+      s.last ? h('p', { class: 'muted small' }, 'Last synced ' + fmtDate(s.last)) : null,
+      s.error ? h('p', { class: 'error' }, 'Last error: ' + s.error) : null,
+      h('button', { class: 'btn', onclick: () => { toast('Syncing…'); syncNow(); } }, 'Sync now')),
+    h('div', { class: 'panel' }, h('h3', {}, 'Storage'),
+      est ? h('p', {}, `This device: ${fmtSize(est.usage || 0)} used of ${fmtSize(est.quota || 0)}`) : h('p', { class: 'muted' }, 'This device: not available in this browser.'),
+      h('progress', { max: 100, value: pct }),
+      h('p', { class: 'muted small' }, persisted ? 'Protected: the browser will not clear your data to save space.' : 'Not protected yet. Installing the app to your home screen helps.'),
+      persisted ? null : h('button', { class: 'btn', onclick: async () => { const ok = await navigator.storage?.persist?.(); toast(ok ? 'Storage is now protected.' : 'The browser declined. Try installing the app first.'); renderView(); } }, 'Protect my data'),
+      h('button', { class: 'btn', onclick: async () => { if (confirm('Remove local copies of audio that is safely in the cloud? Tunes used by poems stay.')) { await freeSpace(); renderView(); } } }, 'Free up space'),
+      h('p', {}, 'Cloud (R2): not set up yet'),
+      h('progress', { max: 100, value: 0 }),
+      h('p', { class: 'muted small' }, 'Cloud usage will show here once it is configured.')),
+    h('div', { class: 'panel' }, h('h3', {}, 'Recording'),
+      mic,
+      h('label', { class: 'row check' }, raw, h('span', {}, 'Raw audio (turn off voice processing). Use with your soundcard or music.')),
+      h('p', { class: 'muted small' }, 'Microphone names appear after you have recorded once and allowed access.')),
     h('div', { class: 'panel' }, h('h3', {}, 'Account'), h('p', {}, owner?.email || ''),
       h('button', { class: 'btn danger', onclick: async () => {
         if (!confirm('Sign out? Anything not yet synced stays on this device until you sign in again.')) return;
         await auth.signOut();
         renderLogin();
       } }, 'Sign out')),
-    h('div', { class: 'panel' }, h('h3', {}, 'Sync'),
-      h('p', {}, syncText(s)),
-      s.last ? h('p', { class: 'muted small' }, 'Last synced ' + fmtDate(s.last)) : null,
-      s.error ? h('p', { class: 'error' }, 'Last error: ' + s.error) : null,
-      h('button', { class: 'btn', onclick: () => { toast('Syncing…'); syncNow(); } }, 'Sync now')),
-    h('div', { class: 'panel' }, h('h3', {}, 'Storage on this device'),
-      est ? h('p', {}, `${fmtSize(est.usage || 0)} used of ${fmtSize(est.quota || 0)}`) : h('p', { class: 'muted' }, 'Not available in this browser.'),
-      h('progress', { max: 100, value: pct }),
-      h('p', { class: 'muted small' }, persisted ? 'Protected: the browser will not clear your data to save space.' : 'Not protected yet. Installing the app to your home screen helps.'),
-      persisted ? null : h('button', { class: 'btn', onclick: async () => { const ok = await navigator.storage?.persist?.(); toast(ok ? 'Storage is now protected.' : 'The browser declined. Try installing the app first.'); renderView(); } }, 'Protect my data'),
-      h('button', { class: 'btn', onclick: async () => { if (confirm('Remove local copies of audio that is safely in the cloud? Tunes used by poems stay.')) { await freeSpace(); renderView(); } } }, 'Free up space')),
-    h('div', { class: 'panel' }, h('h3', {}, 'Recording'),
-      mic,
-      h('label', { class: 'row check' }, raw, h('span', {}, 'Raw audio (turn off voice processing). Use with your soundcard or music.')),
-      h('p', { class: 'muted small' }, 'Microphone names appear after you have recorded once and allowed access.')),
-    h('p', { class: 'muted small foot' }, 'FabStudio Phase 1'));
+    h('p', { class: 'muted small foot' }, 'FabStudio'));
 }
 
 boot();
