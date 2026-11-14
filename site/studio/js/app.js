@@ -4,7 +4,7 @@ import { db, uid, now } from './db.js';
 import * as auth from './auth.js';
 import { syncNow, syncSoon, startSyncLoop, getSyncState, getBlob } from './sync.js';
 import { startCapture, recoverOrphans, isRecording } from './recorder.js';
-import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, fileChip, popMenu, openModal, micIcon, dotsIcon, stopIcon } from './ui.js';
+import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, fileChip, popMenu, openModal, micIcon, dotsIcon, stopIcon, tabIcon } from './ui.js';
 import { publishListView, itemView } from './publish.js';
 import { bakerView, openBakeModal } from './baker.js';
 
@@ -97,7 +97,7 @@ function renderShell() {
   app.replaceChildren(
     h('header', { class: 'bar' }, h('span', { class: 'brand' }, 'FabStudio'), pill),
     h('main', { id: 'view' }),
-    h('nav', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, onclick: () => goTab(k) }, l))),
+    h('nav', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, 'aria-label': l, onclick: () => goTab(k) }, tabIcon(k), h('span', {}, l)))),
   );
   if (paintPill) window.removeEventListener('sync-state', paintPill);
   paintPill = () => {

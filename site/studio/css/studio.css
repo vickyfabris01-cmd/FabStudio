@@ -142,3 +142,7 @@ body.baking .tabs { display: none; }
 body.baking #view { padding-bottom: 12rem; }
 body.baking #toast { bottom: 11rem; }
 .btn[hidden], .iconbtn[hidden] { display: none; }
+
+/* bottom tabs with icons */
+.tabs button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem; padding: .5rem 0 .55rem; font-size: .75rem; }
+.tabs button svg { display: block; }
