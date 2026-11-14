@@ -17,6 +17,6 @@ SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 # ACTION: your own Supabase user ID (CONNECTIONS.md 1.5). Only this user may upload.
 OWNER_USER_ID = "fd462ef4-8cb3-4ec3-9ba5-ab0ef64d4e14"
 # ACTION: where FabStudio is served from, comma-separated, no trailing slash (CONNECTIONS.md 2.5).
-ALLOWED_ORIGINS = "https://YOUR-SITE.pages.dev,http://localhost:8788"
+ALLOWED_ORIGINS = "https://YOUR-SITE.pages.dev,http://localhost:8788,http://127.0.0.1:5500/"
 # Largest single file accepted, in MB.
 MAX_UPLOAD_MB = "500"
