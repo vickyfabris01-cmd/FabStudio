@@ -13,6 +13,55 @@
 <body>
   <div id="app"><p class="boot">Opening FabStudio…</p></div>
   <noscript>FabStudio needs JavaScript.</noscript>
+
+  <!-- Startup watchdog: if the app cannot start, show why instead of staying on "Opening FabStudio…".
+       It only acts while the opening screen is still showing. It never touches your poems or recordings. -->
+  <script>
+    (function () {
+      var shown = false;
+      function repair() {
+        var done = function () { location.reload(); };
+        Promise.resolve()
+          .then(function () { return navigator.serviceWorker ? navigator.serviceWorker.getRegistrations() : []; })
+          .then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); })
+          .then(function () { return window.caches ? caches.keys() : []; })
+          .then(function (keys) { return Promise.all(keys.map(function (k) { return caches.delete(k); })); })
+          .then(done, done);
+      }
+      function show(msg) {
+        if (shown || !document.querySelector('.boot')) return;
+        shown = true;
+        var app = document.getElementById('app');
+        var box = document.createElement('div');
+        box.style.cssText = 'padding:1.2rem;color:#ebe5d8;font:15px/1.5 system-ui,sans-serif';
+        var title = document.createElement('h2');
+        title.textContent = 'FabStudio could not start';
+        var pre = document.createElement('pre');
+        pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;color:#e5736a;font-size:13px';
+        pre.textContent = msg;
+        var note = document.createElement('p');
+        note.style.color = '#9a93a8';
+        note.textContent = 'Your poems and recordings are safe on this device. The button below only refreshes the app files.';
+        var btn = document.createElement('button');
+        btn.className = 'btn primary';
+        btn.textContent = 'Repair app files and reload';
+        btn.onclick = repair;
+        box.append(title, pre, note, btn);
+        app.replaceChildren(box);
+      }
+      window.addEventListener('error', function (e) {
+        show((e.message || 'Error') + (e.filename ? '\n' + e.filename + (e.lineno ? ':' + e.lineno : '') : ''));
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason;
+        show('Startup failed: ' + ((r && (r.message || r.stack)) || r));
+      });
+      setTimeout(function () {
+        show('The app did not finish opening after 8 seconds. One of its files may not have loaded.');
+      }, 8000);
+    })();
+  </script>
+
   <!-- Libraries are self-hosted (shared/vendor) so the app starts offline. -->
   <script src="/shared/vendor/dexie.min.js"></script>
   <script src="/shared/vendor/supabase.js"></script>
