@@ -26,8 +26,8 @@ p { margin: .4rem 0; }
 .pill[data-state='syncing'] { color: var(--accent); border-color: var(--accent); }
 .pill[data-state='error'], .pill[data-state='auth'] { color: var(--danger); border-color: var(--danger); }
 #view { flex: 1; padding: 1rem 1rem 6rem; width: 100%; max-width: 640px; margin: 0 auto; }
-.tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
-.tabs button { font: inherit; background: none; border: 0; color: var(--muted); padding: .9rem 0; border-top: 3px solid transparent; }
+.tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(5, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
+.tabs button { font: inherit; font-size: .85rem; background: none; border: 0; color: var(--muted); padding: .9rem 0; border-top: 3px solid transparent; }
 .tabs button.on { color: var(--text); border-top-color: var(--accent); }
 
 /* controls */
@@ -85,3 +85,15 @@ input.inline, select.inline { min-height: 36px; padding: .3rem .6rem; background
 /* toast */
 #toast { position: fixed; left: 50%; bottom: calc(5rem + env(safe-area-inset-bottom)); transform: translate(-50%, 10px); background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 10px; max-width: 90vw; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 20; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* publishing */
+.thumb { width: 64px; height: 36px; object-fit: cover; border-radius: 6px; background: var(--line); flex: none; display: block; }
+.thumb.big { width: 100%; max-width: 320px; height: auto; aspect-ratio: 16 / 9; }
+.thumb.ph { background: var(--line); }
+.thumb[hidden] { display: none; }
+.badge { font-size: .72rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); flex: none; }
+.badge[data-status='published'] { color: var(--accent); border-color: var(--accent); }
+.seg { display: flex; flex-wrap: wrap; gap: .5rem; }
+.row.top { align-items: flex-start; margin-top: .5rem; }
+.row.top .grow h2 { margin-bottom: .3rem; }
+select[hidden] { display: none; }

@@ -5,9 +5,10 @@ import { syncNow, syncSoon, startSyncLoop, getSyncState, getBlob } from './sync.
 import { startCapture, recoverOrphans, isRecording } from './recorder.js';
 import { preview, bake } from './mixer.js';
 import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton } from './ui.js';
+import { publishListView, itemView } from './publish.js';
 
 const app = document.getElementById('app');
-const state = { tab: 'poems', poemId: null };
+const state = { tab: 'poems', poemId: null, itemId: null, prefill: {} };
 let viewToken = 0;
 let editorFlush = null;
 let paintPill = null;
@@ -69,7 +70,7 @@ function syncText(s) {
 
 function renderShell() {
   const pill = h('button', { class: 'pill', onclick: () => goTab('settings') });
-  const tabs = [['poems', 'Poems'], ['ideas', 'Ideas'], ['tunes', 'Tunes'], ['settings', 'Settings']];
+  const tabs = [['poems', 'Poems'], ['ideas', 'Ideas'], ['tunes', 'Tunes'], ['publish', 'Publish'], ['settings', 'Settings']];
   app.replaceChildren(
     h('header', { class: 'bar' }, h('span', { class: 'brand' }, 'FabStudio'), pill),
     h('main', { id: 'view' }),
@@ -83,7 +84,7 @@ function renderShell() {
     // Refresh list screens after a finished sync, unless the person is in the middle of something.
     if (s.state === 'idle' && s.last && s.last !== lastSeenSync) {
       lastSeenSync = s.last;
-      const busy = state.poemId || isRecording() || document.activeElement?.matches?.('select,input,textarea');
+      const busy = state.poemId || state.itemId || isRecording() || document.activeElement?.matches?.('select,input,textarea');
       if (!busy) renderView();
     }
   };
@@ -96,14 +97,23 @@ function goTab(k) {
   if (isRecording()) return toast('Stop the recording first.');
   state.tab = k;
   state.poemId = null;
+  state.itemId = null;
   renderView();
 }
-const openPoem = (id) => { state.tab = 'poems'; state.poemId = id; renderView(); };
+const openPoem = (id) => { state.tab = 'poems'; state.poemId = id; state.itemId = null; renderView(); };
+const openItem = (id, prefill = {}) => { state.tab = 'publish'; state.itemId = id; state.prefill = prefill; state.poemId = null; renderView(); };
+const nav = {
+  open: openItem,
+  back: () => { state.itemId = null; renderView(); },
+  refresh: () => renderView(),
+};
 
 async function renderView() {
   const token = ++viewToken;
-  const builders = { poems: poemsView, ideas: ideasView, tunes: tunesView, settings: settingsView };
-  const view = state.poemId ? await editorView(state.poemId) : await builders[state.tab]();
+  const builders = { poems: poemsView, ideas: ideasView, tunes: tunesView, publish: () => publishListView(nav), settings: settingsView };
+  const view = state.poemId ? await editorView(state.poemId)
+    : state.itemId ? await itemView(state.itemId, nav, state.prefill)
+    : await builders[state.tab]();
   if (token !== viewToken) return;
   editorFlush = view._flush || null;
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === state.tab));
@@ -214,6 +224,7 @@ async function editorView(id) {
       ? h('ul', { class: 'list compact' }, rows.map((b) => h('li', { class: 'item' },
           playButton(() => getBlob('bakes', b)),
           h('div', { class: 'grow' }, h('div', { class: 'title' }, `Baked ${fmtDate(b.createdAt)}`), h('div', { class: 'sub' }, `${fmtDur(b.duration)}${b.blobPending ? ', waiting to upload' : ''}`)),
+          h('button', { class: 'btn small', onclick: () => { if (isRecording()) return toast('Stop the recording first.'); openItem(crypto.randomUUID(), { bakeId: b.id }); } }, 'Publish'),
           h('button', { class: 'btn small danger', onclick: async () => { if (!confirm('Delete this baked audio?')) return; await softDelete('bakes', b.id); fillBakes(); } }, 'Delete'))))
       : h('p', { class: 'muted small' }, 'Nothing baked yet.'));
   };

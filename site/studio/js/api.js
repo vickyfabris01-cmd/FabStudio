@@ -57,3 +57,14 @@ export async function deleteMedia(key) {
 export async function fetchMedia(key) {
   return await (await call(`/media?key=${q(key)}`)).blob();
 }
+
+// ---- Phase 2: publishing (each needs internet and the owner's sign-in)
+export async function publishItem(itemId, mediaKey, thumbKey) {
+  return await (await call('/publish', { method: 'POST', json: { itemId, mediaKey, thumbKey } })).json();
+}
+export async function unpublishItem(itemId) {
+  await call('/unpublish', { method: 'POST', json: { itemId } });
+}
+export async function deleteItemFiles(itemId) {
+  await call('/item/delete', { method: 'POST', json: { itemId } });
+}

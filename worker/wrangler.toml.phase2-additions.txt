@@ -1,0 +1,14 @@
+# ADD these to your existing worker/wrangler.toml (keep all your current values).
+# Place the new bucket block next to the existing [[r2_buckets]] block:
+
+[[r2_buckets]]
+binding = "PUBLIC_BUCKET"
+bucket_name = "fabstudio-public"
+
+# Then add your Pages address and (for local testing) your local address to ALLOWED_ORIGINS, for example:
+# ALLOWED_ORIGINS = "https://YOUR-PROJECT.pages.dev,http://127.0.0.1:5500,http://localhost:8788"
+#
+# The service key is a SECRET. Do NOT put it in this file. Set it from the terminal instead:
+#   cd worker
+#   npx wrangler secret put SUPABASE_SERVICE_KEY
+# (see docs/CONNECTIONS.md, step 2.3)

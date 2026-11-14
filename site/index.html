@@ -2,18 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14121a">
   <title>Fabris Poet</title>
-  <style>
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #14121a; color: #ebe5d8; font: 18px/1.6 Georgia, serif; text-align: center; padding: 2rem; }
-    a { color: #86c4ad; }
-  </style>
+  <meta name="description" content="Poems, read aloud.">
+  <meta property="og:title" content="Fabris Poet">
+  <meta property="og:description" content="Poems, read aloud.">
+  <link rel="stylesheet" href="/css/public.css">
 </head>
 <body>
-  <main>
-    <h1>Fabris Poet</h1>
-    <p>Poems, read aloud. The public site arrives in Phase 2.</p>
-    <p><a href="/studio/">Open FabStudio</a></p>
+  <header class="top">
+    <a class="brand" href="/">Fabris Poet</a>
+    <button id="account" class="chip" type="button">Sign in</button>
+  </header>
+  <main class="wrap">
+    <section class="hero">
+      <h1>Poems, read aloud.</h1>
+      <p>New voices over music. Listen, react, and say what a line did to you.</p>
+    </section>
+    <div id="grid" class="grid"><p class="empty">Loading…</p></div>
   </main>
+  <footer class="foot"><span>FabisPot</span><a href="/policies/">Rights and policies</a></footer>
+  <noscript><p class="wrap">Fabris Poet needs JavaScript to play poems.</p></noscript>
+  <script src="/shared/vendor/supabase.js"></script>
+  <script type="module" src="/js/home.js"></script>
 </body>
 </html>

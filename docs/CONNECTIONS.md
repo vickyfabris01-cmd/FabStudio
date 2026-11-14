@@ -1,155 +1,162 @@
-# Connections guide: Supabase, Cloudflare, Google, GitHub
+# Connections guide (Phase 2): Supabase, Cloudflare, Google, GitHub
 
-Do these in order. Every value you must copy or paste is marked **ACTION**, and the table in
-section 5 lists them all in one place. Dashboard labels change now and then, so if a menu name
-differs slightly, look for the closest match.
+This guide covers **everything**, so it works for a fresh setup and for upgrading from Phase 1.
+If you finished Phase 1, skip the steps marked **(Phase 1, done)** and do the ones marked **NEW**.
+Every value you copy or paste is marked **ACTION**, and section 5 lists them all in one table.
+Dashboard labels change now and then, so if a menu name differs slightly, look for the closest match.
 
 ## 0. How the pieces connect
 
 ```
- Phone / laptop browser  (FabStudio, served by Cloudflare Pages from the /site folder)
-   |
-   |-- sign in, poems, tunes, idea rows ------> SUPABASE  (Auth + Postgres, protected by RLS)
-   |
-   `-- audio files (ideas, tunes, bakes) -----> WORKER (fabstudio-api) ---> R2 bucket (private)
-            sends the owner's Supabase token      checks the token with Supabase,
-                                                  allows only OWNER_USER_ID
+ Visitors ------------> Pages site (/site)  ------ reads published poems ------> SUPABASE
+ (Fabris Poet)            |  /p/<id> share links run a small Pages Function        items_public view, comments,
+                          |  that adds the title and picture for link previews     reactions, viewer sign-in
+                          |
+                          `-- audio, video, thumbnails --> WORKER  /public/...  --> R2 PUBLIC bucket
+
+ You (FabStudio) ------> Pages site (/site/studio) -- poems, items, moderation --> SUPABASE (owner only)
+                          `-- uploads, publish, unpublish, delete ---> WORKER ---> R2 PRIVATE bucket
+                                                                        (publish copies private -> public)
+ Guest turns into account --> WORKER /viewer/merge (uses the Supabase service key) --> SUPABASE
 ```
 
-- The browser talks to Supabase directly for text and sign-in.
-- The browser never talks to R2 directly. Audio goes through the Worker, which refuses everyone except you.
-- Google is **not used in Phase 1** (see section 3).
+- Viewers can only read **published** items, through a view that hides private file names.
+- Private files (drafts, ideas, tunes, originals) can never be reached from a public address.
+- Only you can publish, unpublish, delete, or moderate.
 
 ---
 
 ## 1. Supabase
 
-### 1.1 Create the project
-1. Go to supabase.com, sign in, and choose **New project**.
-2. Pick a name and the region closest to your audience, and save the database password somewhere safe.
-3. Wait until the project finishes setting up.
+### 1.1 Create the project **(Phase 1, done)**
+supabase.com, then **New project**. Free projects pause after a week of inactivity, so open the app now and then.
 
-Free projects pause after a week of inactivity. If the app suddenly cannot sync, open the
-Supabase dashboard and restore the project.
+### 1.2 Copy your project URL and public key **(Phase 1, done)**
+Project Settings, then **API**. Paste the Project URL and the anon/publishable key into `site/shared/config.js`
+(`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and `worker/wrangler.toml` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`).
+**Never** paste the `service_role` or `secret` key into any file.
 
-### 1.2 Keep sign-ups closed for now
-Authentication, then Sign In / Providers (or Settings): make sure **Email** is enabled, and turn
-**off** "Allow new users to sign up" until Phase 2 (viewer accounts). You will create your own user by hand in 1.5.
+### 1.3 Run the Phase 1 SQL **(Phase 1, done)**
+SQL Editor, then paste `supabase/migrations/001_phase1.sql`, then **Run**.
 
-### 1.3 Copy your project URL and public key
-Project Settings, then **API** (or the **Connect** button at the top of the dashboard).
+### 1.4 Create yourself as the owner **(Phase 1, done)**
+Authentication, then Users, then Add user (tick **Auto Confirm User**). Copy the User UID, then run
+`insert into public.app_owner (user_id) values ('YOUR-UID');` and put the same UID in `wrangler.toml` as `OWNER_USER_ID`.
 
-| Value | Looks like | Paste it into |
-|---|---|---|
-| Project URL | `https://abcd1234.supabase.co` | `site/shared/config.js` as `SUPABASE_URL`, and `worker/wrangler.toml` as `SUPABASE_URL` |
-| Anon key (legacy) or Publishable key | long `eyJ...` text, or `sb_publishable_...` | `site/shared/config.js` as `SUPABASE_ANON_KEY`, and `worker/wrangler.toml` as `SUPABASE_ANON_KEY` |
+### 1.5 Run the Phase 2 SQL **(NEW)**
+1. SQL Editor, then **New query**.
+2. Paste the whole of `supabase/migrations/002_phase2.sql` and press **Run**. It is safe to run twice.
+3. Table Editor should now also show `published_items`, `counters`, `viewer_profiles`, `reactions` and `comments`.
 
-The anon/publishable key is meant to be public. **Never paste the `service_role` or `secret` key into any file in this project.**
+Supabase may flag the view `items_public` as a "security definer view". That is intended: it is the only thing the
+public can read, and it leaves out private file names and unpublished items.
 
-### 1.4 Create the tables
-1. Open **SQL Editor**, then **New query**.
-2. Paste the whole of `supabase/migrations/001_phase1.sql` and press **Run**.
-3. Check **Table Editor**: you should see `app_owner`, `poems`, `tunes`, `idea_captures` and `bakes`,
-   each marked as having Row Level Security enabled.
+### 1.6 Turn on viewer sign-in **(NEW)**
+Authentication, then **Sign In / Providers** (or Settings):
+- Turn **ON** "Allow new users to sign up". Viewers need this. You stay the only owner, because owner power
+  comes from your user ID, not from closed sign-ups.
+- Turn **ON** "Allow anonymous sign-ins". This is what "Continue as guest" uses.
+- Keep the **Email** provider on, with **Confirm email** on.
+- Manual linking is **not** needed. (I mentioned it earlier; the site now merges guests differently.)
 
-### 1.5 Create yourself as the owner
-1. **Authentication, then Users, then Add user, then Create new user.** Enter your email and a strong password, and tick **Auto Confirm User**.
-2. Copy the new user's **User UID** (a UUID like `3f2b...`).
-3. In **SQL Editor** run (with your own UID):
-   ```sql
-   insert into public.app_owner (user_id) values ('PASTE-YOUR-USER-UID-HERE');
-   ```
-4. Paste the same UID into `worker/wrangler.toml` as `OWNER_USER_ID`.
+Authentication, then **URL Configuration**:
+- **Site URL:** your Pages address, for example `https://YOUR-PROJECT.pages.dev`.
+- **Redirect URLs:** add `https://YOUR-PROJECT.pages.dev/**` and, for local testing, `http://localhost:8788/**`.
+  Confirmation and reset-password emails send people back to these addresses.
 
-Only this user can read or write your poems and upload audio. Anyone else, including future viewers, is refused.
+Authentication, then **Emails / SMTP Settings**: set up your own email sender (SMTP) before real viewers sign up.
+Supabase's built-in sender is limited and meant for testing. Any transactional email service works.
+
+### 1.7 Get the service key for guest merging **(NEW)**
+Project Settings, then **API**, then copy the `service_role` (or "secret") key.
+**This key is a master key. Never put it in a file, in GitHub, or in `config.js`.**
+It goes in one place only, as a Worker secret (step 2.4). It is used for one job: moving a guest's reactions and
+comments into their real account.
 
 ---
 
 ## 2. Cloudflare
 
-### 2.1 Account and tools
-You need a Cloudflare account and Node.js on your computer. In a terminal:
+### 2.1 Tools **(Phase 1, done)**
+Node.js, then `cd worker`, `npm install`, `npx wrangler login`.
+
+### 2.2 The two buckets
+- **(Phase 1, done)** Private bucket `fabstudio-private`.
+- **NEW:** Create a second bucket named `fabstudio-public` (R2 Object Storage, then Create bucket, or
+  `npx wrangler r2 bucket create fabstudio-public`). Leave public access **off** and do not enable `r2.dev`.
+  Published files are served through your Worker, so you need no domain.
+
+### 2.3 Update `worker/wrangler.toml` **(NEW)**
+Your current file stays as it is. **Add** this next to the existing `[[r2_buckets]]` block:
+```toml
+[[r2_buckets]]
+binding = "PUBLIC_BUCKET"
+bucket_name = "fabstudio-public"
+```
+Then update `ALLOWED_ORIGINS` so it contains every address the site runs on, comma-separated, no trailing slashes:
+```toml
+ALLOWED_ORIGINS = "https://YOUR-PROJECT.pages.dev,http://127.0.0.1:5500,http://localhost:8788"
+```
+(The same snippet is in `worker/wrangler.toml.phase2-additions.txt`.)
+
+### 2.4 Store the service key as a secret, then deploy **(NEW)**
 ```
 cd worker
-npm install
-npx wrangler login
+npx wrangler secret put SUPABASE_SERVICE_KEY
 ```
-The last command opens a browser so you can approve access.
-
-### 2.2 Create the private R2 bucket
-Dashboard, then **R2 Object Storage**, then **Create bucket**, named `fabstudio-private`.
-Or from the terminal: `npx wrangler r2 bucket create fabstudio-private`.
-
-Leave public access **off**. Do not enable the `r2.dev` address or attach a custom domain to this bucket.
-(Phase 2 will use a separate public bucket for published poems.)
-
-### 2.3 Fill in the Worker settings
-Open `worker/wrangler.toml` and set:
-
-| Setting | Value |
-|---|---|
-| `bucket_name` | `fabstudio-private` (or your bucket's name). Keep `binding = "PRIVATE_BUCKET"` unchanged |
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | from step 1.3 |
-| `OWNER_USER_ID` | from step 1.5 |
-| `ALLOWED_ORIGINS` | the exact web address(es) FabStudio runs on, comma-separated, no trailing slash. Filled in at step 2.6 |
-
-### 2.4 Deploy the Worker
+Paste the key from step 1.7 when asked. Then:
 ```
-cd worker
 npx wrangler deploy
 ```
-It prints the Worker address, like `https://fabstudio-api.YOUR-SUBDOMAIN.workers.dev`.
-**Paste it into `site/shared/config.js` as `API_BASE`** (no trailing slash).
+Open `YOUR-WORKER-ADDRESS/health`. It should show `{"ok":true}`.
 
-Test it: opening `YOUR-WORKER-ADDRESS/health` in a browser should show `{"ok":true}`.
+### 2.5 Pages **(Phase 1, done, with one check)**
+Your Pages project stays as it is: no build command, output directory `site`.
+**NEW check:** leave the project's **Root directory** empty (the repository root). The new `functions` folder sits
+next to `site`, and Pages only finds it from the root. Every push to GitHub deploys the site and the share-link function together.
 
-### 2.5 Put the project on GitHub
-Create a **private** repository on github.com, then in the project folder:
-```
-git init
-git add .
-git commit -m "FabStudio phase 1"
-git branch -M main
-git remote add origin https://github.com/YOUR-NAME/YOUR-REPO.git
-git push -u origin main
-```
+The function needs no settings of its own. It reads the Supabase and Worker addresses from `site/shared/config.js`.
 
-### 2.6 Deploy the site with Cloudflare Pages
-1. Dashboard, then **Workers & Pages**, then **Create**, then **Pages**, then **Connect to Git**, and choose your repository.
-2. **Framework preset:** None. **Build command:** leave empty. **Build output directory:** `site`.
-3. Deploy. You get an address like `https://YOUR-PROJECT.pages.dev`.
-4. **Add that address to `ALLOWED_ORIGINS`** in `worker/wrangler.toml` (keep `http://localhost:8788` for local testing), then run `npx wrangler deploy` in the `worker` folder again. Without this, the browser blocks uploads with a CORS error.
-
-If the dashboard now steers you to Workers with static assets instead of Pages, use `site` as the assets directory.
-FabStudio must be served from the **root** of its address (`https://your-address/studio/`), not from a sub-folder.
-
-### 2.7 Test on your computer first (optional)
-In one terminal: `cd worker && npx wrangler dev` (Worker at `http://localhost:8787`).
-In another, from the project folder: `npx wrangler pages dev site` (site at `http://localhost:8788`).
-While testing locally, set `API_BASE` in `config.js` to `http://localhost:8787`, and switch it back before you deploy.
-Microphone access needs HTTPS or `localhost`.
+### 2.6 Testing on your computer
+- `npx wrangler pages dev site` (run from the **project root**, not from `worker`) serves the site at `http://localhost:8788`
+  and runs the share-link function.
+- VS Code Live Server (root set to `/site` by `.vscode/settings.json`) works for pages, but does **not** run `/p/<id>` links.
+  Use `/poem/?id=<id>` there.
+- While testing locally, set `API_BASE` in `config.js` to `http://localhost:8787` (run `npx wrangler dev` in `worker`)
+  or keep using your deployed Worker, which already allows your local address through `ALLOWED_ORIGINS`.
 
 ---
 
-## 3. Google (not needed in Phase 1)
+## 3. Google sign-in **(NEW, needed in Phase 2)**
 
-FabStudio signs you in with email and password, so **nothing to set up with Google now.**
-`GOOGLE_CLIENT_ID` in `site/shared/config.js` is reserved and stays empty.
+Viewers get the Google popup automatically, with a "Continue with Google" button as the fallback.
 
-In Phase 2 (viewer sign-in with the Google popup) you will:
-1. Create a project in Google Cloud Console and a **Web application** OAuth client ID (Credentials, then Create credentials, then OAuth client ID).
-2. Add your site address as an **Authorized JavaScript origin** and your Supabase callback address
-   (`https://YOUR-PROJECT-REF.supabase.co/auth/v1/callback`) as an **Authorized redirect URI**.
-3. Copy the Client ID and Client secret into Supabase, under Authentication, then Providers, then Google.
-4. Put the Client ID in `config.js` as `GOOGLE_CLIENT_ID`.
+1. Go to console.cloud.google.com and create (or pick) a project.
+2. Set up the consent screen (it may be called **Google Auth Platform**): app name `Fabris Poet`, your support email.
+   Choose **External**. The only information used is name and email, which needs no special review.
+   When you are ready for the public, set the publishing status to **In production**. While it is "Testing", only the test users you list can sign in.
+   If it asks for an authorized domain and does not accept `pages.dev`, leave it empty or use a domain you own.
+3. **Credentials, then Create credentials, then OAuth client ID, then Web application.**
+   - **Authorized JavaScript origins:** `https://YOUR-PROJECT.pages.dev`. For local testing also add `http://localhost` and
+     `http://localhost:8788` (Google asks for both forms when testing locally).
+   - **Authorized redirect URIs:** leave empty (the popup does not use them).
+4. Copy the **Client ID** (ends in `.apps.googleusercontent.com`) and the **Client secret**.
+5. Supabase, then Authentication, then **Providers, then Google:** switch it on and paste the Client ID and Client secret.
+   Leave "Skip nonce checks" **off**; the site sends a nonce.
+6. Paste the Client ID into `site/shared/config.js` as `GOOGLE_CLIENT_ID` and commit.
+7. Test in a normal Chrome window where you are signed in to Google, on your deployed address, with no viewer session
+   (a private window is fine). The popup should appear by itself.
 
-The Phase 2 README will list the exact fields again at that point.
+Good to know:
+- If someone closes the popup, Google waits before showing it again. The **Continue with Google** button in the sign-in sheet always works.
+- Inside the in-app browsers of some apps (WhatsApp, Facebook, Instagram), Google sign-in can fail.
+  The sheet suggests opening the page in the browser, and email or guest access still work.
+- The popup needs HTTPS. `localhost` is allowed for testing.
 
 ---
 
-## 4. Install FabStudio on your phone
-Open `https://YOUR-SITE/studio/` in Chrome on Android, sign in once with internet, then use the browser menu and choose
-**Install app** (or Add to Home screen). In **Settings**, tap **Protect my data** so the browser does not clear your poems to save space.
+## 4. GitHub **(Phase 1, done)**
+Commit and push as before. **Do not commit** the service key. `config.js` and `wrangler.toml` hold only public values.
 
 ---
 
@@ -157,13 +164,16 @@ Open `https://YOUR-SITE/studio/` in Chrome on Android, sign in once with interne
 
 | What | Where you get it | Where it goes |
 |---|---|---|
-| Supabase Project URL | Supabase, Project Settings, API | `site/shared/config.js` (`SUPABASE_URL`), `worker/wrangler.toml` (`SUPABASE_URL`) |
-| Supabase anon / publishable key | Same page | `site/shared/config.js` (`SUPABASE_ANON_KEY`), `worker/wrangler.toml` (`SUPABASE_ANON_KEY`) |
-| Owner User UID | Supabase, Authentication, Users | SQL insert in 1.5, `worker/wrangler.toml` (`OWNER_USER_ID`) |
-| R2 bucket name | Cloudflare, R2 | `worker/wrangler.toml` (`bucket_name`) |
+| Supabase Project URL | Supabase, Project Settings, API | `site/shared/config.js`, `worker/wrangler.toml` |
+| Supabase anon / publishable key | Same page | `site/shared/config.js`, `worker/wrangler.toml` |
+| **Supabase service key (secret)** | Same page (`service_role`) | **Only** `npx wrangler secret put SUPABASE_SERVICE_KEY` |
+| Owner User UID | Supabase, Authentication, Users | SQL insert (1.4), `worker/wrangler.toml` (`OWNER_USER_ID`) |
+| Private bucket name | Cloudflare, R2 | `wrangler.toml` (`PRIVATE_BUCKET` block) |
+| Public bucket name | Cloudflare, R2 | `wrangler.toml` (`PUBLIC_BUCKET` block) |
 | Worker address | printed by `npx wrangler deploy` | `site/shared/config.js` (`API_BASE`) |
-| Pages address | Cloudflare, Workers & Pages | `worker/wrangler.toml` (`ALLOWED_ORIGINS`), then redeploy the Worker |
-| Google Client ID | Phase 2 | `site/shared/config.js` (`GOOGLE_CLIENT_ID`) |
+| Pages address | Cloudflare, Workers & Pages | `wrangler.toml` (`ALLOWED_ORIGINS`), Supabase URL Configuration, Google origins |
+| Google Client ID | Google Cloud Console | `site/shared/config.js` (`GOOGLE_CLIENT_ID`), Supabase Google provider |
+| Google Client secret | Google Cloud Console | Supabase Google provider only |
 
 ---
 
@@ -171,12 +181,18 @@ Open `https://YOUR-SITE/studio/` in Chrome on Android, sign in once with interne
 
 | What you see | Likely cause and fix |
 |---|---|
-| Sign-in says "not the FabStudio owner" | Step 1.5 insert was not run, or used the wrong UID |
-| Sync pill says "Sync problem", error `api-401` | Your session expired. Open Settings and sign in again |
-| Error `api-403` | `OWNER_USER_ID` in `wrangler.toml` does not match your user. Fix it and redeploy the Worker |
-| Error `api-400` or `api-413` | A file was rejected: key format, or larger than `MAX_UPLOAD_MB` |
-| Browser console shows a CORS error | The exact site address is missing from `ALLOWED_ORIGINS`. Add it and redeploy the Worker |
-| Error mentions "permission denied" or "does not exist" | The migration (1.4) was not run, or the owner row (1.5) is missing |
-| Nothing syncs for days | The free Supabase project paused. Restore it in the dashboard |
-| New version does not appear | The app updates in the background. Close and reopen it twice, or clear site data |
-| Microphone will not start | Allow the microphone for the site in browser settings |
+| Publishing says "File not uploaded yet" | The upload had not finished. Wait for the pill to say Synced, then tap Publish again |
+| Publishing fails with a 500 error | The `PUBLIC_BUCKET` binding is missing in `wrangler.toml`, or the Worker was not redeployed |
+| Public page shows poems but no audio or picture | `API_BASE` in `config.js` is wrong, or the Worker was not redeployed with `PUBLIC_BUCKET` |
+| Home page says "Could not load poems" | `002_phase2.sql` was not run, or the Supabase URL or key in `config.js` is wrong |
+| Reacting says "not available right now" | The item has reactions or comments switched off, you are blocked, or the item is unpublished |
+| "Continue as guest" fails | Anonymous sign-ins are off (step 1.6), or the visitor's network hit a sign-up limit. Try again in a while |
+| Confirmation or reset email never arrives | Set up SMTP (1.6), check spam, and check Redirect URLs |
+| The email link opens a "not allowed" page | The Pages address is missing from Supabase's Redirect URLs |
+| Google popup never appears | Not signed in to Google in that browser, popup dismissed earlier, an in-app browser, or the origin is missing from Google's list |
+| Google says "origin not allowed" | Add the exact address to Authorized JavaScript origins and wait a few minutes |
+| Google works but Supabase refuses | Client ID or secret mismatch in Supabase's Google provider |
+| Guest data did not move after sign-in | The service key secret is missing (`npx wrangler secret put SUPABASE_SERVICE_KEY`), or the guest session was already gone |
+| Share link shows no preview | Open `YOUR-SITE/p/<id>` and view the page source. If the `og:` tags are missing, the `functions` folder was not deployed (check Root directory, 2.5). Chat apps cache previews, so test with a new poem |
+| CORS error in the console | The exact address is missing from `ALLOWED_ORIGINS`. Add it and redeploy the Worker |
+| New version does not appear in FabStudio | Close and reopen it twice, or clear the site's cache (not its data) |

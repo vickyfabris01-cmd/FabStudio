@@ -13,6 +13,11 @@ db.version(1).stores({
   meta: 'key',
 });
 
+// Phase 2: items to publish (audio or video, with a thumbnail).
+db.version(2).stores({
+  items: 'id, status, updatedAt, dirty',
+});
+
 export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
 export const newer = (a, b) => Date.parse(a) > Date.parse(b);
