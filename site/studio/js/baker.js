@@ -5,7 +5,7 @@ import { getBlob, syncSoon } from './sync.js';
 import { startCapture } from './recorder.js';
 import { LiveMix, BAKE_TUNE_VOLUME, loadRemix, Remix, rebake } from './mixer.js';
 import { createDraftFromBake, syncDraftFromBake } from './publish.js';
-import { h, fmtDur, fmtDate, extFor, toast, openModal } from './ui.js';
+import { h, fmtDur, fmtDate, extFor, toast, openModal, micIcon, stopIcon } from './ui.js';
 
 const prefs = () => {
   try { return { deviceId: '', raw: false, ...JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}') }; }
@@ -24,6 +24,21 @@ async function pickPoemView(nav) {
       ? h('ul', { class: 'list' }, rows.map((p) => h('li', { class: 'item', onclick: () => nav.pickBake(p.id) },
           h('div', { class: 'grow' }, h('div', { class: 'title' }, poemName(p)), h('div', { class: 'sub' }, `${p.stanzas?.length || 0} stanzas`)))))
       : h('p', { class: 'empty' }, 'No poems yet. Write one in the Poems tab first.'));
+}
+
+// Opens the microphone. If the microphone chosen in Settings is not connected, falls back to the default one.
+async function openMic() {
+  const p = prefs();
+  const base = { echoCancellation: !p.raw, noiseSuppression: !p.raw, autoGainControl: !p.raw };
+  if (p.deviceId) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: p.deviceId } } });
+    } catch (e) {
+      if (e.name !== 'OverconstrainedError' && e.name !== 'NotFoundError') throw e;
+      toast('The microphone chosen in Settings is not connected. Using the default one.');
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({ audio: base });
 }
 
 /* ---------- step 2: the baking page ---------- */
@@ -46,35 +61,54 @@ export async function bakerView({ poemId, nav }) {
   let stream = null;
   let session = null;
   let recording = false;
+  let saving = false;
+  let starting = null;
   let capDelay = 0;
   let t0 = 0;
   let tick = null;
+  let micShown = '';
 
-  const status = h('div', { class: 'bake-status' }, 'Ready');
-  const tuneBtn = h('button', { class: 'btn', type: 'button', hidden: !hasTune }, 'Start tune');
-  const micBtn = h('button', { class: 'btn', type: 'button' }, 'Start mic');
-  const stopBtn = h('button', { class: 'btn primary', type: 'button', hidden: true }, 'Stop');
+  /* the tune, shown like a file chip on the poem page */
+  const chipIc = h('span', { class: 'chip-ic', 'aria-hidden': 'true' }, '▶');
+  const chipSub = h('span', { class: 'chip-s' }, 'ready');
+  const chipBtn = h('button', { class: 'chip-main', type: 'button', 'aria-label': 'Start the tune' },
+    chipIc, h('span', {}, tune?.title || 'Tune'), chipSub);
+  const chip = h('div', { class: 'chip', style: 'min-width:0' }, chipBtn);
+
+  /* the record button, to the right of the tune */
+  const micBtn = h('button', { class: 'fab rec', type: 'button', 'aria-label': 'Start recording', style: 'position:static;box-shadow:none;flex:none' });
+  const timeLabel = h('span', { class: 'fab-t' }, '0:00');
 
   const paint = () => {
-    if (!recording) { status.textContent = hasTune ? `Ready. Tune: ${tune.title || 'Untitled tune'}` : 'Ready. No background tune for this poem.'; return; }
-    const tuneState = !hasTune ? '' : mix.tunePlaying ? ', tune playing' : mix.tuneOffset != null ? ', tune finished' : ', tune not started';
-    status.textContent = `● Recording ${fmtDur((Date.now() - t0) / 1000)}${tuneState}`;
-    micBtn.textContent = 'Mic on';
-    micBtn.classList.add('on');
-    stopBtn.hidden = false;
-    tuneBtn.hidden = !hasTune || mix.tuneOffset != null;
+    if (recording) {
+      if (micShown !== 'live') {
+        micShown = 'live';
+        micBtn.classList.add('live');
+        micBtn.replaceChildren(stopIcon(), timeLabel);
+        micBtn.setAttribute('aria-label', 'Stop recording');
+      }
+      timeLabel.textContent = fmtDur((Date.now() - t0) / 1000);
+    } else if (micShown !== 'idle') {
+      micShown = 'idle';
+      micBtn.classList.remove('live');
+      micBtn.replaceChildren(micIcon());
+      micBtn.setAttribute('aria-label', 'Start recording');
+    }
+    if (hasTune) {
+      const playing = mix.tunePlaying;
+      const done = !playing && mix.tuneOffset != null;
+      chipIc.textContent = playing ? '♪' : done ? '✓' : '▶';
+      chipSub.textContent = playing ? 'playing' : done ? 'finished' : 'ready';
+    }
   };
 
-  const ensureRecording = async () => {
-    if (recording) return true;
-    const p = prefs();
-    const audio = { echoCancellation: !p.raw, noiseSuppression: !p.raw, autoGainControl: !p.raw };
-    if (p.deviceId) audio.deviceId = { exact: p.deviceId };
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio }); }
+  const begin = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) { toast('Recording is not available in this browser.'); return false; }
+    try { stream = await openMic(); }
     catch (e) { toast('Microphone unavailable: ' + (e.message || e.name)); return false; }
     try {
       await mix.begin(stream);
-      session = await startCapture({ poemId, stream, deviceId: p.deviceId, raw: p.raw });
+      session = await startCapture({ poemId, stream, deviceId: prefs().deviceId, raw: prefs().raw });
     } catch (e) {
       stream.getTracks().forEach((tr) => tr.stop());
       toast('Could not start recording: ' + (e.message || e));
@@ -83,23 +117,33 @@ export async function bakerView({ poemId, nav }) {
     capDelay = mix.ctx.currentTime - mix.t0;
     recording = true;
     t0 = Date.now();
-    tick = setInterval(paint, 500);
+    tick = setInterval(paint, 250);
     paint();
+    toast('Recording with ' + (stream.getAudioTracks()[0]?.label || 'the default microphone'));
     return true;
   };
+  const ensureRecording = () => {
+    if (recording) return Promise.resolve(true);
+    if (!starting) starting = begin().finally(() => { starting = null; });
+    return starting;
+  };
 
-  micBtn.onclick = () => { if (!recording) ensureRecording(); };
-  tuneBtn.onclick = async () => {
+  // Tap the tune: the microphone starts too (if it is not already running), then the tune plays once.
+  chipBtn.onclick = async () => {
+    if (!hasTune) return;
+    if (mix.tunePlaying) return toast('The tune is playing.');
+    if (mix.tuneOffset != null) return toast('The tune plays once for each bake.');
     if (!(await ensureRecording())) return;
     mix.startTune();
     paint();
   };
   mix.onTuneEnd = () => paint();
 
-  stopBtn.onclick = async () => {
+  const stopAndSave = async () => {
+    if (saving) return;
+    saving = true;
     clearInterval(tick);
-    stopBtn.disabled = true;
-    status.textContent = 'Saving…';
+    micBtn.disabled = true;
     let out = null;
     let capId = null;
     try {
@@ -127,6 +171,14 @@ export async function bakerView({ poemId, nav }) {
     openBakeModal(bid, { onDone: () => nav.back() });
   };
 
+  // Tap the mic: start recording. Tap again: stop and save.
+  micBtn.onclick = async () => {
+    if (saving || starting) return;
+    if (!recording) { await ensureRecording(); return; }
+    if (Date.now() - t0 < 800) return; // ignore an accidental double tap
+    stopAndSave();
+  };
+
   const back = h('button', {
     class: 'btn small', type: 'button',
     onclick: () => {
@@ -136,16 +188,28 @@ export async function bakerView({ poemId, nav }) {
     },
   }, '← Studio');
 
+  const controls = h('div', {
+    class: 'bake-controls',
+    style: 'position:sticky;top:3.6rem;z-index:4;background:var(--bg);display:flex;align-items:center;gap:.7rem;padding:.6rem 0;border-bottom:1px solid var(--line)',
+  }, hasTune ? chip : null, micBtn);
+
   paint();
   const el = h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, back, h('span', { class: 'status' }, 'Baking')),
     h('h2', {}, poemName(poem)),
+    controls,
+    h('p', { class: 'muted small', style: 'margin:.5rem 0 0' }, hasTune
+      ? 'Tap the tune to start it and the microphone together, or tap the red mic first and start the tune later. Use headphones.'
+      : 'No background tune for this poem. Tap the red mic to record.'),
     h('div', { class: 'bake-text' }, (poem.stanzas || []).join('\n\n') || 'This poem has no text yet.'),
-    h('div', { class: 'spacer' }),
-    h('div', { class: 'bakebar' },
-      status,
-      h('div', { class: 'seg' }, tuneBtn, micBtn, stopBtn),
-      h('p', { class: 'muted small' }, 'Tune plays once at half volume. Your voice keeps recording until you tap Stop. Use headphones.')));
+    h('div', { class: 'spacer' }));
+
+  // Keep the controls just under the app header while the poem scrolls.
+  setTimeout(() => {
+    const bar = document.querySelector('.bar');
+    if (bar) controls.style.top = `calc(${bar.offsetHeight}px + env(safe-area-inset-top))`;
+  }, 0);
+
   el._dispose = () => { if (!recording) mix.dispose(); };
   return el;
 }
