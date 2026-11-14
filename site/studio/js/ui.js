@@ -101,3 +101,84 @@ export function playButton(getBlob) {
   };
   return b;
 }
+
+/* ---------- Studio reorganisation helpers ---------- */
+const NS = 'http://www.w3.org/2000/svg';
+const svg = (paths, size = 24) => {
+  const s = document.createElementNS(NS, 'svg');
+  s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', size); s.setAttribute('height', size);
+  s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2');
+  s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); s.setAttribute('aria-hidden', 'true');
+  for (const d of paths) { const p = document.createElementNS(NS, 'path'); p.setAttribute('d', d); s.append(p); }
+  return s;
+};
+export const micIcon = (size) => svg(['M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z', 'M5 11a7 7 0 0 0 14 0', 'M12 18v3'], size);
+export const uploadIcon = (size) => svg(['M12 16V4', 'M7 9l5-5 5 5', 'M5 20h14'], size);
+export const dotsIcon = (size) => svg(['M12 5.5v.01', 'M12 12v.01', 'M12 18.5v.01'], size);
+export const stopIcon = (size = 18) => { const s = svg([], size); s.setAttribute('fill', 'currentColor'); const r = document.createElementNS(NS, 'rect'); r.setAttribute('x', 6); r.setAttribute('y', 6); r.setAttribute('width', 12); r.setAttribute('height', 12); r.setAttribute('rx', 2); s.append(r); return s; };
+
+// A modal box over the page. Close it with the returned close(); listen for 'modal-close' on box.
+export function openModal(...kids) {
+  const back = h('div', { class: 'modal-back', onclick: (e) => { if (e.target === back) close(); } });
+  const box = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' }, kids);
+  back.append(box);
+  document.body.append(back);
+  const close = () => { if (!back.isConnected) return; back.remove(); box.dispatchEvent(new CustomEvent('modal-close')); };
+  return { close, box };
+}
+
+// A small menu under a button. The button's parent must be position: relative (.menuwrap).
+export function popMenu(btn, items) {
+  const wrap = btn.parentElement;
+  const old = wrap.querySelector('.menu');
+  if (old) { old.remove(); return; }
+  document.querySelectorAll('.menu').forEach((m) => m.remove());
+  const away = (e) => { if (!menu.contains(e.target) && !btn.contains(e.target)) close(); };
+  const close = () => { menu.remove(); document.removeEventListener('click', away, true); };
+  const menu = h('div', { class: 'menu', role: 'menu' }, items.map((it) => h('button', {
+    class: 'menu-item' + (it.danger ? ' danger' : ''), role: 'menuitem', type: 'button',
+    onclick: (e) => { e.stopPropagation(); close(); it.onclick(); },
+  }, it.label)));
+  menu.addEventListener('click', (e) => e.stopPropagation());
+  wrap.append(menu);
+  setTimeout(() => document.addEventListener('click', away, true), 0);
+}
+
+// A file shown as a pill. Tap plays it (or runs onOpen). Press and hold shows a Delete button.
+export function fileChip({ label, sub, getBlob, onOpen, onDelete }) {
+  const icon = h('span', { class: 'chip-ic', 'aria-hidden': 'true' }, onOpen ? '◉' : '▶');
+  const main = h('button', { class: 'chip-main', type: 'button' }, icon, h('span', {}, label), sub ? h('span', { class: 'chip-s' }, sub) : null);
+  const del = h('button', { class: 'chip-del', type: 'button', hidden: true }, 'Delete');
+  const wrap = h('div', { class: 'chip' }, main, del);
+  let audio = null; let url = null; let press = null; let longed = false; let armTimer = null;
+  const reset = () => {
+    if (audio) { audio.pause(); audio = null; }
+    if (url) { URL.revokeObjectURL(url); url = null; }
+    icon.textContent = onOpen ? '◉' : '▶';
+    if (stopActive === reset) stopActive = null;
+  };
+  const disarm = () => { del.hidden = true; clearTimeout(armTimer); };
+  const arm = () => { del.hidden = false; clearTimeout(armTimer); armTimer = setTimeout(disarm, 5000); };
+  main.addEventListener('pointerdown', () => { longed = false; press = setTimeout(() => { longed = true; arm(); }, 500); });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) main.addEventListener(ev, () => clearTimeout(press));
+  main.addEventListener('contextmenu', (e) => e.preventDefault());
+  main.onclick = async () => {
+    if (longed) { longed = false; return; }
+    if (!del.hidden) return disarm();
+    if (onOpen) return onOpen();
+    if (audio) return reset();
+    if (stopActive) stopActive();
+    icon.textContent = '…';
+    const blob = await getBlob();
+    if (!blob) { icon.textContent = '▶'; return toast('Not on this device yet. Connect to the internet to download it.'); }
+    url = URL.createObjectURL(blob);
+    audio = new Audio(url);
+    audio.onended = reset;
+    audio.onerror = () => { reset(); toast('This audio could not be played.'); };
+    stopActive = reset;
+    icon.textContent = '■';
+    audio.play().catch(reset);
+  };
+  del.onclick = () => { disarm(); reset(); onDelete(); };
+  return wrap;
+}

@@ -26,7 +26,7 @@ p { margin: .4rem 0; }
 .pill[data-state='syncing'] { color: var(--accent); border-color: var(--accent); }
 .pill[data-state='error'], .pill[data-state='auth'] { color: var(--danger); border-color: var(--danger); }
 #view { flex: 1; padding: 1rem 1rem 6rem; width: 100%; max-width: 640px; margin: 0 auto; }
-.tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(5, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
+.tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(3, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
 .tabs button { font: inherit; font-size: .85rem; background: none; border: 0; color: var(--muted); padding: .9rem 0; border-top: 3px solid transparent; }
 .tabs button.on { color: var(--text); border-top-color: var(--accent); }
 
@@ -66,7 +66,7 @@ input.inline, select.inline { min-height: 36px; padding: .3rem .6rem; background
 
 /* poem editor: the page is the memorable part */
 .poem-title { font-family: var(--serif); font-size: 1.6rem; background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding-left: 0; }
-.poem-body { font-family: var(--serif); font-size: 1.2rem; line-height: 1.75; background: transparent; border: 0; border-radius: 0; padding: 1rem 0; min-height: 45vh; resize: vertical; }
+.poem-body { font-family: var(--serif); font-size: 1.2rem; line-height: 1.75; background: transparent; border: 0; border-radius: 0; padding: 1rem 0; min-height: 8rem; resize: none; overflow: hidden; display: block; }
 .status { color: var(--muted); font-size: .85rem; }
 
 /* recorder */
@@ -97,3 +97,48 @@ input.inline, select.inline { min-height: 36px; padding: .3rem .6rem; background
 .row.top { align-items: flex-start; margin-top: .5rem; }
 .row.top .grow h2 { margin-bottom: .3rem; }
 select[hidden] { display: none; }
+
+/* ---- Studio reorganisation: floating buttons, menus, modals, file chips, baking page ---- */
+.fab { position: fixed; right: 1rem; bottom: calc(4.8rem + env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 28px; border: 1px solid var(--line); background: var(--surface); color: var(--text); display: flex; align-items: center; justify-content: center; gap: .4rem; z-index: 6; font: inherit; padding: 0; box-shadow: 0 2px 10px rgba(0, 0, 0, .45); }
+.fab.rec { background: var(--rec); color: #1a0d0c; border-color: var(--rec); }
+.fab.live { width: auto; min-width: 56px; padding: 0 1.1rem; animation: pulse 1.6s ease-in-out infinite; }
+.fab-t { font-variant-numeric: tabular-nums; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .fab.live { animation: none; } }
+
+.iconbtn { font: inherit; color: var(--text); background: none; border: 0; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; padding: 0; }
+.iconbtn.mic { border: 1px solid var(--line); background: var(--surface); }
+.menuwrap { position: relative; flex: none; }
+.menu { position: absolute; right: 0; top: 100%; z-index: 30; min-width: 230px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .3rem 0; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.menu-item { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; padding: .75rem 1rem; min-height: 44px; }
+.menu-item.danger { color: var(--danger); border-top: 1px solid var(--line); }
+
+.modal-back { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 40; }
+.modal { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 1rem; display: grid; gap: .8rem; max-height: 85dvh; overflow: auto; }
+.stack { display: grid; gap: .6rem; }
+
+.files { display: flex; flex-wrap: wrap; gap: .5rem; margin: .7rem 0 .2rem; }
+.files:empty { display: none; }
+.chip { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; max-width: 100%; }
+.chip-main { font: inherit; font-size: .85rem; color: var(--text); background: none; border: 0; padding: .35rem .8rem; min-height: 36px; display: inline-flex; gap: .4rem; align-items: center; touch-action: manipulation; max-width: 100%; }
+.chip-main span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 11rem; }
+.chip-s { color: var(--muted); font-size: .75rem; }
+.chip-del { font: inherit; font-size: .8rem; color: var(--danger); background: none; border: 0; border-left: 1px solid var(--line); padding: 0 .8rem; min-height: 36px; }
+.chip-del[hidden] { display: none; }
+
+/* silent blank area: the page can always scroll past the last line, even for a short poem */
+.spacer { height: 60vh; flex: none; }
+
+.filters { display: flex; gap: .5rem; margin-bottom: .6rem; }
+.fchip { font: inherit; font-size: .85rem; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: .25rem .9rem; min-height: 36px; }
+.fchip.on { color: var(--accent); border-color: var(--accent); }
+
+.bake-text { font-family: var(--serif); font-size: 1.25rem; line-height: 1.8; white-space: pre-wrap; padding: 1rem 0; }
+.bakebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: .8rem 1rem calc(.8rem + env(safe-area-inset-bottom)); display: grid; gap: .6rem; z-index: 6; }
+.bakebar .seg .btn { flex: 1; }
+.bakebar p { margin: 0; }
+.bake-status { font-size: .95rem; }
+.btn.on { border-color: var(--rec); color: var(--rec); pointer-events: none; }
+body.baking .tabs { display: none; }
+body.baking #view { padding-bottom: 12rem; }
+body.baking #toast { bottom: 11rem; }
+.btn[hidden], .iconbtn[hidden] { display: none; }

@@ -1,6 +1,7 @@
 // Sync engine. Local data is the truth; the cloud is a replica.
 //  1. Push: upload pending files to R2, then upsert changed rows to Supabase.
 //  2. Pull: fetch rows changed on the server since last time (last write wins).
+import { CONFIG } from '../../shared/config.js';
 import { sb } from '../../shared/supabase.js';
 import { db, now, newer } from './db.js';
 import { getToken } from './auth.js';
@@ -34,6 +35,28 @@ let running = false;
 let timer = null;
 let state = { state: 'idle', pending: 0, error: null, last: null };
 
+// Adds "where it failed" and a plain hint to an error, so Settings shows something useful.
+function hostOf(url) {
+  try { return new URL(url).host; } catch { return String(url || '(not set)'); }
+}
+function tag(e, where) {
+  if (e && e.tagged) return e;
+  const raw = String(e?.message || e?.error_description || e || 'unknown error');
+  const bits = [where, raw];
+  if (e?.status) bits.push('HTTP ' + e.status);
+  if (e?.code) bits.push('code ' + e.code);
+  if (e?.details) bits.push(String(e.details));
+  if (e?.hint) bits.push('hint: ' + e.hint);
+  if (/failed to fetch|networkerror|load failed/i.test(raw)) {
+    bits.push(`no answer from the server (CORS block, wrong address or no network). Page ${location.origin}, Worker ${hostOf(CONFIG.API_BASE)}, Supabase ${hostOf(CONFIG.SUPABASE_URL)}`);
+  }
+  console.error('[sync]', where, e);
+  const err = new Error(bits.join(' | '));
+  err.status = e?.status;
+  err.tagged = true;
+  return err;
+}
+
 function emit(patch) {
   state = { ...state, ...patch };
   window.dispatchEvent(new CustomEvent('sync-state', { detail: state }));
@@ -50,23 +73,28 @@ async function pushTable(name) {
   const cfg = T[name];
   const table = db[name];
   const files = BLOBS[name];
-  let firstError = null;
+  const errors = [];
   const rows = await table.where('dirty').equals(1).toArray();
   for (const r of rows) {
+    let step = 'start';
     try {
       if (r.deletedAt && files.length) {
-        for (const f of files) if (r[f.key]) await deleteMedia(r[f.key]);
+        for (const f of files) {
+          if (r[f.key]) { step = 'delete file ' + r[f.key]; await deleteMedia(r[f.key]); }
+        }
         await table.where('id').equals(r.id).modify((x) => {
           for (const f of files) { x[f.key] = null; x[f.pending] = 0; delete x[f.blob]; }
         });
       } else {
         for (const f of files) {
           if (r[f.pending] && r[f.blob]) {
+            step = 'upload ' + r[f.key];
             await uploadBlob(r[f.key], r[f.blob]);
             await table.update(r.id, { [f.pending]: 0 });
           }
         }
       }
+      step = 'save row to Supabase';
       const fresh = await table.get(r.id);
       const { error } = await sb.from(cfg.remote).upsert(toRemote(fresh, cfg.fields), { onConflict: 'id' });
       if (error) throw error;
@@ -74,10 +102,14 @@ async function pushTable(name) {
       await table.where('id').equals(r.id).and((x) => x.updatedAt === fresh.updatedAt)
         .modify(name === 'items' ? { dirty: 0, remote: 1 } : { dirty: 0 });
     } catch (e) {
-      firstError = firstError || e;
+      errors.push(tag(e, `push ${name} ${String(r.id).slice(0, 8)} (${step})`));
     }
   }
-  if (firstError) throw firstError;
+  if (errors.length) {
+    const first = errors[0];
+    if (errors.length > 1) first.message += ` (+${errors.length - 1} more in ${name})`;
+    throw first;
+  }
 }
 
 async function pullTable(name) {
@@ -85,34 +117,42 @@ async function pullTable(name) {
   const table = db[name];
   const files = BLOBS[name];
   const metaKey = 'pull:' + name;
-  let since = (await db.meta.get(metaKey))?.value || '1970-01-01T00:00:00Z';
-  for (;;) {
-    const { data, error } = await sb.from(cfg.remote).select('*').gt('server_updated_at', since)
-      .order('server_updated_at', { ascending: true }).limit(500);
-    if (error) throw error;
-    if (!data.length) break;
-    for (const rr of data) {
-      const row = fromRemote(rr, cfg.fields);
-      const local = await table.get(row.id);
-      if (!local || (!local.dirty && newer(row.updatedAt, local.updatedAt))) {
-        const merged = { ...(local || {}), ...row, dirty: 0 };
-        if (name === 'items') merged.remote = 1;
-        if (!local) for (const f of files) merged[f.pending] = 0;
-        if (!local && name === 'captures') merged.status = 'done';
-        if (merged.deletedAt) for (const f of files) { delete merged[f.blob]; merged[f.pending] = 0; }
-        await table.put(merged);
+  let step = 'read changes';
+  try {
+    let since = (await db.meta.get(metaKey))?.value || '1970-01-01T00:00:00Z';
+    for (;;) {
+      step = 'read changes';
+      const { data, error } = await sb.from(cfg.remote).select('*').gt('server_updated_at', since)
+        .order('server_updated_at', { ascending: true }).limit(500);
+      if (error) throw error;
+      if (!data.length) break;
+      step = 'save locally';
+      for (const rr of data) {
+        const row = fromRemote(rr, cfg.fields);
+        const local = await table.get(row.id);
+        if (!local || (!local.dirty && newer(row.updatedAt, local.updatedAt))) {
+          const merged = { ...(local || {}), ...row, dirty: 0 };
+          if (name === 'items') merged.remote = 1;
+          if (!local) for (const f of files) merged[f.pending] = 0;
+          if (!local && name === 'captures') merged.status = 'done';
+          if (merged.deletedAt) for (const f of files) { delete merged[f.blob]; merged[f.pending] = 0; }
+          await table.put(merged);
+        }
       }
+      since = data[data.length - 1].server_updated_at;
+      await db.meta.put({ key: metaKey, value: since });
+      if (data.length < 500) break;
     }
-    since = data[data.length - 1].server_updated_at;
-    await db.meta.put({ key: metaKey, value: since });
-    if (data.length < 500) break;
-  }
-  if (name === 'items') {
-    // Items deleted elsewhere are removed here too (items are hard-deleted, not tombstoned).
-    const { data: ids, error } = await sb.from(cfg.remote).select('id');
-    if (error) throw error;
-    const have = new Set(ids.map((r) => r.id));
-    await db.items.filter((x) => x.remote === 1 && !x.dirty && !have.has(x.id)).delete();
+    if (name === 'items') {
+      // Items deleted elsewhere are removed here too (items are hard-deleted, not tombstoned).
+      step = 'check deleted items';
+      const { data: ids, error } = await sb.from(cfg.remote).select('id');
+      if (error) throw error;
+      const have = new Set(ids.map((r) => r.id));
+      await db.items.filter((x) => x.remote === 1 && !x.dirty && !have.has(x.id)).delete();
+    }
+  } catch (e) {
+    throw tag(e, `pull ${name} (${step})`);
   }
 }
 
@@ -124,11 +164,15 @@ export async function syncNow() {
     if (!(await getToken())) return emit({ state: 'auth', pending: await pendingCount() });
     emit({ state: 'syncing', error: null });
     let pushError = null;
+    let pullError = null;
     for (const n of ORDER) {
       try { await pushTable(n); } catch (e) { pushError = pushError || e; }
     }
-    for (const n of ORDER) await pullTable(n);
-    if (pushError) throw pushError;
+    for (const n of ORDER) {
+      try { await pullTable(n); } catch (e) { pullError = pullError || e; }
+    }
+    const failure = pushError || pullError;
+    if (failure) throw failure;
     emit({ state: 'idle', pending: await pendingCount(), last: now() });
   } catch (e) {
     emit({ state: 'error', error: String(e.message || e.status || e), pending: await pendingCount() });

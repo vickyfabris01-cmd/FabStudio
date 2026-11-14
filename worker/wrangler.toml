@@ -8,18 +8,11 @@ compatibility_date = "2025-09-01"
 binding = "PRIVATE_BUCKET"
 bucket_name = "fabstudio-private"
 
-# Public bucket: published files only. Served through this Worker at /public/...
-[[r2_buckets]]
-binding = "PUBLIC_BUCKET"
-bucket_name = "fabstudio-public"
-
 [vars]
 SUPABASE_URL = "https://sylkgfkseqxppmxtxfvs.supabase.co"
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN5bGtnZmtzZXF4cHBteHR4ZnZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ1Mzk4NzIsImV4cCI6MjExMDExNTg3Mn0.ksVzsa1qaTlSFo_iFy0z5QSot4i_-rnsqpa39p_IpLo"
 OWNER_USER_ID = "fd462ef4-8cb3-4ec3-9ba5-ab0ef64d4e14"
-# Every address the site runs on: comma-separated, no spaces needed, NO trailing slashes.
-ALLOWED_ORIGINS = "https://fabstudio.pages.dev,http://localhost:8788,http://127.0.0.1:5500"
+# ACTION: where FabStudio is served from, comma-separated, no trailing slash (CONNECTIONS.md 2.5).
+ALLOWED_ORIGINS = "https://YOUR-SITE.pages.dev,http://localhost:8788,http://127.0.0.1:5500/"
+# Largest single file accepted, in MB.
 MAX_UPLOAD_MB = "500"
-
-# NOT in this file: SUPABASE_SERVICE_KEY is a secret.
-# Set it with: npx wrangler secret put SUPABASE_SERVICE_KEY

@@ -5,7 +5,7 @@ import { db, now } from './db.js';
 import { syncSoon, syncAndWait, getSyncState } from './sync.js';
 import { publishItem, unpublishItem, deleteItemFiles, fetchMedia } from './api.js';
 import { thumbFromImage, thumbFromTitle, thumbFromVideo } from './thumbs.js';
-import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton } from './ui.js';
+import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, openModal, micIcon, uploadIcon } from './ui.js';
 
 // One place to change the upload limits.
 export const LIMITS = { videoSeconds: 300, videoMB: 150, audioMB: 100 };
@@ -44,29 +44,135 @@ async function snapshot(poemId) {
   return p && !p.deletedAt ? { poemTitle: p.title || '', poemStanzas: p.stanzas || [] } : { poemTitle: '', poemStanzas: [] };
 }
 
-/* ---------- list ---------- */
+/* ---------- drafts made by the app ---------- */
+function itemRow(o) {
+  const t = now();
+  return {
+    id: o.id, kind: o.kind, poemId: o.poemId || null, title: o.title, description: '', poemTitle: '', poemStanzas: [],
+    mime: o.mime, duration: o.duration, mediaKey: `items/${o.id}.${extFor(o.mime, o.name || '')}`, thumbKey: `thumbs/${o.id}.jpg`,
+    publicMediaKey: null, publicThumbKey: null, status: 'draft', publishedAt: null, commentsEnabled: true, reactionsEnabled: true,
+    createdAt: t, updatedAt: t, dirty: 1, remote: 0, blob: o.blob, thumbBlob: o.thumb, mediaPending: 1, thumbPending: 1,
+    ...(o.bakeId ? { bakeId: o.bakeId } : {}),
+  };
+}
+
+// A baked poem lands in Studio as a draft, named after the poem.
+export async function createDraftFromBake(bake) {
+  const poem = bake.poemId ? await db.poems.get(bake.poemId) : null;
+  const title = poem && !poem.deletedAt ? poemLabel(poem) : 'Baked poem';
+  const thumb = await thumbFromTitle(title);
+  const id = crypto.randomUUID();
+  await db.items.put(itemRow({ id, kind: 'audio', poemId: bake.poemId, title, mime: bake.mime || bake.blob.type, duration: bake.duration, blob: bake.blob, thumb, bakeId: bake.id }));
+  syncSoon();
+  return id;
+}
+
+// After a re-bake at a new volume, drafts made from that bake get the new audio. Published items are left alone.
+export async function syncDraftFromBake(bakeId) {
+  const b = await db.bakes.get(bakeId);
+  if (!b || !b.blob) return;
+  const drafts = await db.items.filter((x) => x.bakeId === bakeId && x.status === 'draft').toArray();
+  for (const it of drafts) await db.items.update(it.id, { blob: b.blob, mime: b.mime, duration: b.duration, mediaPending: 1, updatedAt: now(), dirty: 1 });
+  if (drafts.length) syncSoon();
+}
+
+// An uploaded audio or video file is saved as a draft first.
+export async function createDraftFromFile(kind, file) {
+  const problem = await checkSource(file, kind);
+  if (problem) throw new Error(problem);
+  const duration = await probeDuration(file);
+  const title = file.name.replace(/\.[^.]+$/, '') || 'Untitled';
+  let thumb;
+  try { thumb = kind === 'video' ? await thumbFromVideo(file) : await thumbFromTitle(title); } catch { thumb = await thumbFromTitle(title); }
+  const id = crypto.randomUUID();
+  const mime = file.type || (kind === 'video' ? 'video/mp4' : 'audio/mpeg');
+  await db.items.put(itemRow({ id, kind, title, mime, duration, blob: file, thumb, name: file.name }));
+  syncSoon();
+  return id;
+}
+
+// Uploads what is pending, copies it to the public bucket and flips the item to Published.
+export async function publishItemNow(id) {
+  if (!navigator.onLine) throw new Error('This needs internet.');
+  await syncAndWait();
+  let row = await db.items.get(id);
+  if (!row) throw new Error('That item is gone.');
+  if (row.mediaPending || row.thumbPending || row.dirty) throw new Error(getSyncState().error || 'The upload did not finish. Try again with a better connection.');
+  const out = await publishItem(id, row.mediaKey, row.thumbKey);
+  await db.items.update(id, {
+    status: 'published', publishedAt: row.publishedAt || now(), publicMediaKey: out.publicMediaKey,
+    publicThumbKey: out.publicThumbKey, ...(await snapshot(row.poemId)), updatedAt: now(), dirty: 1,
+  });
+  await syncAndWait();
+  row = await db.items.get(id);
+  if (row.dirty) throw new Error('The files are ready but the page did not update. Tap Publish again.');
+}
+
+/* ---------- list (the Studio tab) ---------- */
+let listFilter = 'all';
+
 export async function publishListView(nav) {
-  const rows = (await db.items.toArray()).sort(newest);
+  const all = (await db.items.toArray()).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const rows = all.filter((r) => (listFilter === 'published' ? r.status === 'published' : listFilter === 'drafts' ? r.status !== 'published' : true));
   const subs = new Map();
+  const filters = h('div', { class: 'filters' }, [['all', 'All'], ['drafts', 'Drafts'], ['published', 'Published']].map(([k, l]) =>
+    h('button', { class: 'fchip' + (listFilter === k ? ' on' : ''), type: 'button', onclick: () => { listFilter = k; nav.refresh(); } }, l)));
   const list = rows.length
     ? h('ul', { class: 'list' }, rows.map((r) => {
-        const sub = h('div', { class: 'sub' }, `${STATUS[r.status] || r.status}, ${r.kind}, ${fmtDur(r.duration)}${r.dirty ? ', waiting to sync' : ''}`);
+        const sub = h('div', { class: 'sub' }, `${r.kind}, ${fmtDur(r.duration)}, edited ${fmtDate(r.updatedAt)}${r.dirty ? ', waiting to sync' : ''}`);
         subs.set(r.id, sub);
         const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' })) : h('div', { class: 'thumb ph' });
+        const end = r.status === 'published'
+          ? h('span', { class: 'badge', 'data-status': r.status }, STATUS[r.status])
+          : (() => {
+              const btn = h('button', {
+                class: 'btn small primary', type: 'button',
+                onclick: async (e) => {
+                  e.stopPropagation();
+                  btn.disabled = true;
+                  btn.textContent = 'Publishing…';
+                  try { await publishItemNow(r.id); toast('Published.'); } catch (x) { toast(x.message || String(x)); }
+                  nav.refresh();
+                },
+              }, 'Publish');
+              return btn;
+            })();
         return h('li', { class: 'item', onclick: () => nav.open(r.id) }, thumb,
-          h('div', { class: 'grow' }, h('div', { class: 'title' }, r.title || 'Untitled'), sub),
-          h('span', { class: 'badge', 'data-status': r.status }, STATUS[r.status] || r.status));
+          h('div', { class: 'grow' }, h('div', { class: 'title' }, r.title || 'Untitled'), h('div', { class: 'sub' }, STATUS[r.status] || r.status), sub), end);
       }))
-    : h('p', { class: 'empty' }, 'Nothing here yet. Tap New item to publish a baked poem, an audio file or a video.');
+    : h('p', { class: 'empty' }, listFilter === 'all'
+        ? 'Nothing here yet. Tap Bake to record a poem over its tune, or use the upload button to add an audio or video file.'
+        : 'Nothing in this view.');
+
+  const upload = h('button', {
+    class: 'fab', type: 'button', 'aria-label': 'Upload audio or video',
+    onclick: () => {
+      const m = openModal(h('h3', {}, 'Upload to Studio'),
+        h('p', { class: 'muted small' }, 'The file is saved as a draft first. Publish it from the list.'),
+        h('div', { class: 'stack' },
+          h('button', { class: 'btn primary', onclick: () => { m.close(); chooseFile('audio'); } }, 'Audio file'),
+          h('button', { class: 'btn primary', onclick: () => { m.close(); chooseFile('video'); } }, 'Video file'),
+          h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel')));
+    },
+  }, uploadIcon());
+  const chooseFile = async (kind) => {
+    const file = await pickFile(kind === 'video' ? 'video/mp4' : 'audio/*');
+    if (!file) return;
+    try { await createDraftFromFile(kind, file); toast('Saved as a draft. It uploads when you are online.'); listFilter = 'drafts'; nav.refresh(); }
+    catch (e) { toast(e.message || String(e)); }
+  };
+
+  const live = h('button', { class: 'iconbtn mic', type: 'button', 'aria-label': 'Go live (coming later)', onclick: () => toast('Going live comes in a later phase.') }, micIcon(22));
   const el = h('section', { class: 'view' },
-    h('div', { class: 'toolbar' }, h('h2', {}, 'Publish'), h('button', { class: 'btn primary', onclick: () => nav.open(crypto.randomUUID()) }, 'New item')),
-    list);
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Studio'),
+      h('div', { class: 'row' }, live, h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake'))),
+    filters, list, upload);
   if (navigator.onLine && rows.some((r) => r.status === 'published')) {
     sb.from('counters').select('*').then(({ data }) => {
       for (const c of data || []) {
         const sub = subs.get(c.item_id);
         const r = rows.find((x) => x.id === c.item_id);
-        if (sub && r) sub.textContent = `${STATUS[r.status]}, ${c.n_plays} plays, ${c.n_reactions} reactions, ${c.n_comments} comments`;
+        if (sub && r) sub.textContent = `${c.n_plays} plays, ${c.n_reactions} reactions, ${c.n_comments} comments`;
       }
     }).catch(() => {});
   }
@@ -93,7 +199,7 @@ export async function itemView(id, nav, prefill = {}) {
     h('label', { class: 'row check' }, comments, h('span', {}, 'Allow comments')),
     h('label', { class: 'row check' }, reactions, h('span', {}, 'Allow reactions')));
 
-  const back = h('button', { class: 'btn small', onclick: () => nav.back() }, '← Publish');
+  const back = h('button', { class: 'btn small', onclick: () => nav.back() }, '← Studio');
   const root = h('section', { class: 'view' }, h('div', { class: 'toolbar' }, back));
 
   if (existing) {
@@ -200,17 +306,7 @@ async function existingUI(root, item, f, nav) {
   const publish = h('button', { class: 'btn primary', onclick: guarded(async () => {
     needNet();
     await saveMeta();
-    await syncAndWait();
-    let row = await db.items.get(id);
-    if (row.mediaPending || row.thumbPending || row.dirty) throw new Error(getSyncState().error || 'The upload did not finish. Try again with a better connection.');
-    const out = await publishItem(id, row.mediaKey, row.thumbKey);
-    await db.items.update(id, {
-      status: 'published', publishedAt: row.publishedAt || now(), publicMediaKey: out.publicMediaKey,
-      publicThumbKey: out.publicThumbKey, ...(await snapshot(row.poemId)), updatedAt: now(), dirty: 1,
-    });
-    await syncAndWait();
-    row = await db.items.get(id);
-    if (row.dirty) throw new Error('The files are ready but the page did not update. Tap Publish again.');
+    await publishItemNow(id);
     toast('Published.');
   }) }, item.status === 'published' ? 'Update and republish' : 'Publish');
 

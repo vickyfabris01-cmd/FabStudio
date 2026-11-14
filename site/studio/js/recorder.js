@@ -20,7 +20,8 @@ export async function startCapture(opts = {}) {
     autoGainControl: !opts.raw,
   };
   if (opts.deviceId) audio.deviceId = { exact: opts.deviceId };
-  const stream = await navigator.mediaDevices.getUserMedia({ audio });
+  // opts.stream: reuse a microphone stream someone else opened (the baking page). The caller then stops it.
+  const stream = opts.stream || await navigator.mediaDevices.getUserMedia({ audio });
   const mime = pickMime();
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: opts.raw ? 128000 : 64000 } : undefined);
   const id = uid();
@@ -42,7 +43,7 @@ export async function startCapture(opts = {}) {
       rec.stop();
       await stopped;
       await Promise.all(writes);
-      stream.getTracks().forEach((tr) => tr.stop());
+      if (!opts.stream) stream.getTracks().forEach((tr) => tr.stop());
       try { await wake?.release(); } catch { /* ignore */ }
       active = null;
       await finalize(id, (Date.now() - t0) / 1000);
