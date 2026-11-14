@@ -27,6 +27,7 @@ export const fmtDate = (iso) =>
 export function extFor(mime = '', name = '') {
   const m = mime.toLowerCase();
   if (m.includes('webm')) return 'webm';
+  if (m.startsWith('video/') && m.includes('mp4')) return 'mp4'; // an MP4 video is not audio
   if (m.includes('mp4') || m.includes('m4a') || m.includes('aac')) return 'm4a';
   if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
   if (m.includes('ogg')) return 'ogg';
@@ -182,11 +183,3 @@ export function fileChip({ label, sub, getBlob, onOpen, onDelete }) {
   del.onclick = () => { disarm(); reset(); onDelete(); };
   return wrap;
 }
-
-// Bottom tab icons.
-const TAB_PATHS = {
-  studio: ['M4 10v4', 'M8 6v12', 'M12 3v18', 'M16 8v8', 'M20 11v2'],
-  poems: ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'],
-  settings: ['M4 6h2', 'M10 6h10', 'M8 4a2 2 0 1 0 0 4a2 2 0 1 0 0-4', 'M4 12h10', 'M18 12h2', 'M16 10a2 2 0 1 0 0 4a2 2 0 1 0 0-4', 'M4 18h2', 'M10 18h10', 'M8 16a2 2 0 1 0 0 4a2 2 0 1 0 0-4'],
-};
-export const tabIcon = (name, size = 22) => svg(TAB_PATHS[name] || [], size);
