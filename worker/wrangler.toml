@@ -3,20 +3,23 @@ name = "fabstudio-api"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
 
-# R2 bucket binding. The bucket must exist first (CONNECTIONS.md 2.2).
-# The name on the right must match the bucket you created, the binding name must stay PRIVATE_BUCKET.
+# Private bucket: drafts, ideas, tunes, originals. Never public.
 [[r2_buckets]]
 binding = "PRIVATE_BUCKET"
 bucket_name = "fabstudio-private"
 
+# Public bucket: published files only. Served through this Worker at /public/...
+[[r2_buckets]]
+binding = "PUBLIC_BUCKET"
+bucket_name = "fabstudio-public"
+
 [vars]
-# ACTION: your Supabase Project URL (CONNECTIONS.md 1.3).
 SUPABASE_URL = "https://sylkgfkseqxppmxtxfvs.supabase.co"
-# ACTION: your Supabase anon / publishable key (CONNECTIONS.md 1.3). Safe to be public.
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN5bGtnZmtzZXF4cHBteHR4ZnZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ1Mzk4NzIsImV4cCI6MjExMDExNTg3Mn0.ksVzsa1qaTlSFo_iFy0z5QSot4i_-rnsqpa39p_IpLo"
-# ACTION: your own Supabase user ID (CONNECTIONS.md 1.5). Only this user may upload.
 OWNER_USER_ID = "fd462ef4-8cb3-4ec3-9ba5-ab0ef64d4e14"
-# ACTION: where FabStudio is served from, comma-separated, no trailing slash (CONNECTIONS.md 2.5).
-ALLOWED_ORIGINS = "https://YOUR-SITE.pages.dev,http://localhost:8788,http://127.0.0.1:5500/"
-# Largest single file accepted, in MB.
+# Every address the site runs on: comma-separated, no spaces needed, NO trailing slashes.
+ALLOWED_ORIGINS = "https://fabstudio.pages.dev,http://localhost:8788,http://127.0.0.1:5500"
 MAX_UPLOAD_MB = "500"
+
+# NOT in this file: SUPABASE_SERVICE_KEY is a secret.
+# Set it with: npx wrangler secret put SUPABASE_SERVICE_KEY
