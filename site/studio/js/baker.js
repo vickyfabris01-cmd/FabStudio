@@ -8,8 +8,8 @@ import { createDraftFromBake, syncDraftFromBake } from './publish.js';
 import { h, fmtDur, fmtDate, extFor, toast, openModal, micIcon, stopIcon } from './ui.js';
 
 const prefs = () => {
-  try { return { deviceId: '', raw: false, ...JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}') }; }
-  catch { return { deviceId: '', raw: false }; }
+  try { return { raw: false, ...JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}') }; }
+  catch { return { raw: false }; }
 };
 const poemName = (p) => p.title || (p.stanzas?.[0] || '').split('\n')[0] || 'Untitled';
 
@@ -26,19 +26,10 @@ async function pickPoemView(nav) {
       : h('p', { class: 'empty' }, 'No poems yet. Write one in the Poems tab first.'));
 }
 
-// Opens the microphone. If the microphone chosen in Settings is not connected, falls back to the default one.
-async function openMic() {
+// Opens the microphone the phone picks by itself: an external one when it is connected, otherwise the built-in one.
+function openMic() {
   const p = prefs();
-  const base = { echoCancellation: !p.raw, noiseSuppression: !p.raw, autoGainControl: !p.raw };
-  if (p.deviceId) {
-    try {
-      return await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: p.deviceId } } });
-    } catch (e) {
-      if (e.name !== 'OverconstrainedError' && e.name !== 'NotFoundError') throw e;
-      toast('The microphone chosen in Settings is not connected. Using the default one.');
-    }
-  }
-  return navigator.mediaDevices.getUserMedia({ audio: base });
+  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: !p.raw, noiseSuppression: !p.raw, autoGainControl: !p.raw } });
 }
 
 /* ---------- step 2: the baking page ---------- */
@@ -108,7 +99,7 @@ export async function bakerView({ poemId, nav }) {
     catch (e) { toast('Microphone unavailable: ' + (e.message || e.name)); return false; }
     try {
       await mix.begin(stream);
-      session = await startCapture({ poemId, stream, deviceId: prefs().deviceId, raw: prefs().raw });
+      session = await startCapture({ poemId, stream, raw: prefs().raw });
     } catch (e) {
       stream.getTracks().forEach((tr) => tr.stop());
       toast('Could not start recording: ' + (e.message || e));
@@ -342,6 +333,7 @@ export async function openBakeModal(bakeId, { onDone, onChange } = {}) {
   saveBtn.onclick = async () => {
     if (!remix || busy) return;
     busy = true;
+    m.box.dataset.locked = 'Saving. Keep this open.'; // the phone's back button must not close the window now
     player?.pause();
     saveBtn.disabled = true;
     progress.hidden = false;
@@ -360,6 +352,7 @@ export async function openBakeModal(bakeId, { onDone, onChange } = {}) {
       toast('Saving failed: ' + (e.message || e));
     } finally {
       busy = false;
+      delete m.box.dataset.locked;
       saveBtn.disabled = false;
       progress.hidden = true;
       showVol();

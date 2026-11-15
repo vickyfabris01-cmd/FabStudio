@@ -4,7 +4,7 @@ import { db, uid, now } from './db.js';
 import * as auth from './auth.js';
 import { syncNow, syncSoon, startSyncLoop, getSyncState, getBlob } from './sync.js';
 import { startCapture, recoverOrphans, isRecording } from './recorder.js';
-import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, fileChip, popMenu, openModal, micIcon, dotsIcon, stopIcon, tabIcon } from './ui.js';
+import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, fileChip, popMenu, openModal, micIcon, dotsIcon, stopIcon, pencilIcon, tabIcon } from './ui.js';
 import { publishListView, itemView } from './publish.js';
 import { bakerView, openBakeModal } from './baker.js';
 
@@ -17,8 +17,8 @@ let paintPill = null;
 let lastSeenSync = null;
 
 const prefs = () => {
-  try { return { deviceId: '', raw: false, ...JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}') }; }
-  catch { return { deviceId: '', raw: false }; }
+  try { return { raw: false, ...JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}') }; }
+  catch { return { raw: false }; }
 };
 const setPrefs = (p) => localStorage.setItem('fabstudio.prefs', JSON.stringify({ ...prefs(), ...p }));
 const newest = (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt);
@@ -63,6 +63,7 @@ async function boot() {
   await recoverOrphans();
   if (!(await auth.ownerInfo())) return renderLogin();
   await migrateLooseRecordings();
+  armHistory();
   renderShell();
   startSyncLoop();
 }
@@ -128,7 +129,10 @@ const openPoem = (id) => { state.tab = 'poems'; state.poemId = id; state.itemId 
 const openItem = (id, prefill = {}) => { state.tab = 'studio'; state.itemId = id; state.prefill = prefill; state.poemId = null; state.bake = null; renderView(); };
 const nav = {
   open: openItem,
-  back: () => { state.itemId = null; state.bake = null; renderView(); },
+  back: () => {
+    if (backTo(STUDIO_LIST)) return;
+    state.itemId = null; state.bake = null; renderView();
+  },
   refresh: () => renderView(),
   bake: () => { state.tab = 'studio'; state.itemId = null; state.poemId = null; state.bake = { poemId: null }; renderView(); },
   pickBake: (id) => { state.bake = { poemId: id }; renderView(); },
@@ -149,7 +153,97 @@ async function renderView() {
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === state.tab));
   document.getElementById('view').replaceChildren(view);
   window.scrollTo(0, 0);
+  recordNav();
 }
+
+/* ---------- phone back button ---------- */
+// Each screen the person reaches is a browser history entry, so the phone's back button walks back
+// through the screens instead of closing the app. On the first screen it does nothing.
+const STUDIO_LIST = { tab: 'studio', poemId: null, itemId: null, bake: null };
+const POEMS_LIST = { tab: 'poems', poemId: null, itemId: null, bake: null };
+const snapNow = () => ({ tab: state.tab, poemId: state.poemId, itemId: state.itemId, bake: state.bake ? { poemId: state.bake.poemId } : null });
+const keyOf = (s) => [s.tab, s.poemId || '', s.itemId || '', s.bake ? 'bake:' + (s.bake.poemId || '') : ''].join('|');
+let historyReady = false;
+let trail = [];       // trail[i] is the screen shown by history entry i. Entry 0 is a guard behind the first screen.
+let at = 0;           // the history entry on show
+let ignorePop = false; // set while the app moves the history by itself
+let unwinding = false; // set while an on-screen back button is moving the history
+
+// Browsers skip history entries a page adds before the person has touched it, so the guard and the
+// first screen are added on the first tap instead of at start-up.
+function armHistory() {
+  const start = () => {
+    window.removeEventListener('pointerup', start, true);
+    window.removeEventListener('keydown', start, true);
+    if (historyReady) return;
+    historyReady = true;
+    history.replaceState({ guard: true }, '');
+    at = 1;
+    trail = ['', keyOf(snapNow())];
+    history.pushState({ at, snap: snapNow() }, '');
+  };
+  window.addEventListener('pointerup', start, true);
+  window.addEventListener('keydown', start, true);
+}
+
+// Called after every draw. A different screen becomes a new history entry; the same screen redrawn
+// (after a sync or a save) does not.
+function recordNav() {
+  if (!historyReady || unwinding) return;
+  const snap = snapNow();
+  const key = keyOf(snap);
+  if (key === trail[at]) return;
+  at += 1;
+  trail.length = at;
+  trail[at] = key;
+  history.pushState({ at, snap }, '');
+}
+
+// For the on-screen back buttons: step back to an earlier screen if the person came that way, so
+// the phone's back button afterwards does not lead into the screen they just closed.
+function backTo(target) {
+  if (!historyReady) return false;
+  const key = keyOf(target);
+  for (let j = at - 1; j >= 1; j--) {
+    if (trail[j] !== key) continue;
+    unwinding = true;
+    setTimeout(() => { unwinding = false; }, 1500);
+    history.go(j - at);
+    return true;
+  }
+  return false;
+}
+
+window.addEventListener('popstate', async (e) => {
+  if (ignorePop) { ignorePop = false; return; }
+  if (!historyReady) return;
+  unwinding = false;
+  const st = e.state;
+  const target = st && Number.isInteger(st.at) ? st.at : 0;
+  // Undo the back press: return to the entry we were on.
+  const stay = () => {
+    const delta = at - target;
+    if (!delta) return;
+    ignorePop = true;
+    setTimeout(() => { ignorePop = false; }, 800);
+    history.go(delta);
+  };
+  if (!st || st.guard || !st.snap) return stay();            // behind the first screen: nothing to go back to
+  if (!document.getElementById('view')) return stay();       // the sign-in screen is showing
+  const modal = [...document.querySelectorAll('.modal')].pop();
+  if (modal) {                                                // back closes an open window first
+    stay();
+    if (modal.dataset.locked) toast(modal.dataset.locked); else modal.parentElement.click();
+    return;
+  }
+  if (isRecording()) { toast('Stop the recording first.'); return stay(); }
+  try { await editorFlush?.(); } catch { /* the poem is saved again on its next change */ }
+  const snap = st.snap;
+  at = target;
+  trail[at] = keyOf(snap);
+  Object.assign(state, { tab: snap.tab, poemId: snap.poemId, itemId: snap.itemId, bake: snap.bake, prefill: {} });
+  renderView();
+});
 
 // Save the open poem when the app is hidden or closed.
 document.addEventListener('visibilitychange', () => { if (document.hidden) editorFlush?.(); });
@@ -182,8 +276,7 @@ function recFab(getPoemId, onDone) {
     if (!navigator.mediaDevices?.getUserMedia) return toast('Recording is not available in this browser.');
     pid = getPoemId();
     try {
-      const p = prefs();
-      session = await startCapture({ poemId: pid, deviceId: p.deviceId, raw: p.raw });
+      session = await startCapture({ poemId: pid, raw: prefs().raw });
     } catch (e) {
       return toast('Microphone unavailable: ' + (e.message || e.name));
     }
@@ -222,8 +315,13 @@ async function poemsView() {
     toast('Saved in a new poem.');
     renderView();
   });
+  // The pen sits above the red mic and starts a new poem.
+  const pen = h('button', {
+    class: 'fab pen', type: 'button', 'aria-label': 'New poem',
+    onclick: () => { if (isRecording()) return toast('Stop the recording first.'); openPoem(uid()); },
+  }, pencilIcon(24));
   return h('section', { class: 'view' },
-    h('div', { class: 'toolbar' }, h('h2', {}, 'Poems'), h('button', { class: 'btn primary', onclick: () => openPoem(uid()) }, 'New poem')),
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Poems')),
     rows.length
       ? h('ul', { class: 'list' }, rows.map((p) => {
           const more = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Poem actions' }, dotsIcon());
@@ -244,8 +342,8 @@ async function poemsView() {
             h('span', { class: 'dot', 'data-pending': p.dirty ? '1' : '0', title: p.dirty ? 'Waiting to sync' : 'Synced' }),
             h('span', { class: 'menuwrap' }, more));
         }))
-      : h('p', { class: 'empty' }, 'No poems yet. Tap New poem and start writing, or tap the red button and speak. It saves whenever you pause.'),
-    fab);
+      : h('p', { class: 'empty' }, 'No poems yet. Tap the pen and start writing, or tap the red button and speak. It saves whenever you pause.'),
+    pen, fab);
 }
 
 async function editorView(id) {
@@ -282,15 +380,13 @@ async function editorView(id) {
   window.addEventListener('resize', grow);
   setTimeout(grow, 60);
 
-  /* files of this poem, shown under the title */
+  /* tune and voice recordings of this poem, shown under the title. Baked audio is not shown here: it is under Manage files. */
   const fillFiles = async () => {
     const tune = tuneId ? await db.tunes.get(tuneId) : null;
     const caps = (await db.captures.where('poemId').equals(id).toArray()).filter((c) => !c.deletedAt && c.status === 'done').sort(newest);
-    const bakes = (await db.bakes.where('poemId').equals(id).toArray()).filter((b) => !b.deletedAt).sort(newest);
     const chips = [];
     if (tune && !tune.deletedAt) chips.push(fileChip({ label: tune.title || 'Tune', sub: fmtDur(tune.duration), getBlob: () => getBlob('tunes', tune), onDelete: removeTune }));
     for (const c of caps) chips.push(fileChip({ label: 'Voice', sub: fmtDur(c.duration), getBlob: () => getBlob('captures', c), onDelete: () => removeFile('captures', c.id, 'this recording') }));
-    for (const b of bakes) chips.push(fileChip({ label: title.value.trim() || poemName(base), sub: 'Baked ' + fmtDur(b.duration), onOpen: () => openBakeModal(b.id, { onChange: fillFiles }), onDelete: () => removeFile('bakes', b.id, 'this baked file') }));
     filesBox.replaceChildren(...chips);
   };
   async function removeFile(table, fid, what) {
@@ -368,8 +464,10 @@ async function editorView(id) {
       for (const c of caps) rows.push(h('li', { class: 'item' }, playButton(() => getBlob('captures', c)),
         h('div', { class: 'grow' }, h('div', { class: 'title' }, 'Voice recording'), h('div', { class: 'sub' }, `${fmtDur(c.duration)}, ${fmtDate(c.createdAt)}`)),
         delBtn(() => removeFile('captures', c.id, 'this recording'))));
+      // "Open" shows the preview window, where the background volume can be changed.
       for (const b of bakes) rows.push(h('li', { class: 'item' }, playButton(() => getBlob('bakes', b)),
         h('div', { class: 'grow' }, h('div', { class: 'title' }, 'Baked audio'), h('div', { class: 'sub' }, `${fmtDur(b.duration)}, ${fmtDate(b.createdAt)}`)),
+        h('button', { class: 'btn small', type: 'button', onclick: () => openBakeModal(b.id, { onChange: paint }) }, 'Open'),
         delBtn(() => removeFile('bakes', b.id, 'this baked file'))));
       box.replaceChildren(rows.length ? h('ul', { class: 'list compact' }, rows) : h('p', { class: 'muted' }, 'No files in this poem yet.'));
     };
@@ -383,20 +481,26 @@ async function editorView(id) {
     await fillFiles();
   });
 
-  const back = async () => {
-    if (isRecording()) return toast('Stop the recording first.');
-    await save();
+  // Leave the editor the way the phone's back button does: step back to the poem list if the person came that way.
+  const leave = () => {
+    if (backTo(POEMS_LIST)) return;
     state.poemId = null;
     renderView();
   };
 
+  const back = async () => {
+    if (isRecording()) return toast('Stop the recording first.');
+    await save();
+    leave();
+  };
+
   const del = async () => {
     if (isRecording()) return toast('Stop the recording first.');
-    if (!created) { state.poemId = null; return renderView(); }
+    if (!created) { editorFlush = null; return leave(); }
     if (!confirm('Delete this poem with its recordings and baked audio?')) return;
     await deletePoem(id);
-    state.poemId = null;
-    renderView();
+    editorFlush = null; // never save the text back into a deleted poem
+    leave();
   };
 
   const more = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Poem actions' }, dotsIcon());
@@ -440,13 +544,6 @@ async function settingsView() {
   const s = getSyncState();
   const est = navigator.storage?.estimate ? await navigator.storage.estimate() : null;
   const persisted = navigator.storage?.persisted ? await navigator.storage.persisted() : false;
-  let devices = [];
-  try { devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput'); } catch { /* none */ }
-
-  const mic = h('select', { 'aria-label': 'Microphone', onchange: () => setPrefs({ deviceId: mic.value }) },
-    h('option', { value: '' }, 'Phone default'),
-    devices.filter((d) => d.deviceId && d.deviceId !== 'default').map((d, i) => h('option', { value: d.deviceId }, d.label || `Microphone ${i + 1}`)));
-  mic.value = p.deviceId || '';
   const raw = h('input', { type: 'checkbox', checked: p.raw, onchange: () => setPrefs({ raw: raw.checked }) });
 
   const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Password' });
@@ -476,9 +573,8 @@ async function settingsView() {
       h('progress', { max: 100, value: 0 }),
       h('p', { class: 'muted small' }, 'Cloud usage will show here once it is configured.')),
     h('div', { class: 'panel' }, h('h3', {}, 'Recording'),
-      mic,
       h('label', { class: 'row check' }, raw, h('span', {}, 'Raw audio (turn off voice processing). Use with your soundcard or music.')),
-      h('p', { class: 'muted small' }, 'Microphone names appear after you have recorded once and allowed access.')),
+      h('p', { class: 'muted small' }, 'The microphone is chosen by your phone: an external one when it is connected, otherwise the built-in one.')),
     h('div', { class: 'panel' }, h('h3', {}, 'Account'), h('p', {}, owner?.email || ''),
       h('button', { class: 'btn danger', onclick: async () => {
         if (!confirm('Sign out? Anything not yet synced stays on this device until you sign in again.')) return;

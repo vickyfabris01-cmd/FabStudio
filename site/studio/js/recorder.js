@@ -11,7 +11,8 @@ export function pickMime() {
   return window.MediaRecorder ? options.find((m) => MediaRecorder.isTypeSupported(m)) || '' : '';
 }
 
-// opts: { poemId, deviceId, raw }  raw = true turns off voice processing (use with a soundcard / music).
+// opts: { poemId, raw }  raw = true turns off voice processing (use with a soundcard / music).
+// No microphone is named: the phone picks one, an external one when connected, otherwise the built-in one.
 export async function startCapture(opts = {}) {
   if (active) throw new Error('Already recording');
   const audio = {
@@ -19,7 +20,6 @@ export async function startCapture(opts = {}) {
     noiseSuppression: !opts.raw,
     autoGainControl: !opts.raw,
   };
-  if (opts.deviceId) audio.deviceId = { exact: opts.deviceId };
   // opts.stream: reuse a microphone stream someone else opened (the baking page). The caller then stops it.
   const stream = opts.stream || await navigator.mediaDevices.getUserMedia({ audio });
   const mime = pickMime();
