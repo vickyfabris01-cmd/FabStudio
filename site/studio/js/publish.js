@@ -167,7 +167,7 @@ const statusText = (r) => (r.status === 'published'
 let listFilter = 'all';
 
 export async function publishListView(nav) {
-  const all = (await db.items.toArray()).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const all = (await db.items.toArray()).filter((r) => r.kind !== 'live').sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   const rows = all.filter((r) => (listFilter === 'published' ? r.status === 'published' : listFilter === 'drafts' ? r.status !== 'published' : true));
   const stats = new Map(); // item id -> its stat icons
   const lines = new Map(); // item id -> its status line

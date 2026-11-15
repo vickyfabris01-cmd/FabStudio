@@ -153,6 +153,7 @@ async function main() {
   let item = null;
   try { item = id ? await data.getItem(id) : null; } catch (e) { root.replaceChildren(h('p', { class: 'empty' }, 'Could not load this poem. ' + data.friendly(e))); return; }
   if (!item) { root.replaceChildren(h('p', { class: 'empty' }, 'This poem is not available.'), h('p', {}, h('a', { href: '/' }, 'Back to all poems'))); return; }
+  if (item.kind === 'live' && !item.public_media_key) { location.replace(`/live/?id=${id}`); return; }
   document.title = `${item.title} | Fabris Poet`;
 
   // The view belongs to the guest (or real) account as soon as it exists.

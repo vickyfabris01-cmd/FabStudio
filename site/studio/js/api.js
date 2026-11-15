@@ -102,3 +102,6 @@ export async function unpublishItem(itemId) {
 export async function deleteItemFiles(itemId) {
   await call('/item/delete', { method: 'POST', json: { itemId } });
 }
+export async function liveAssets({ itemId, thumbKey, recordingKey }) {
+  return await (await call('/live/assets', { method: 'POST', json: { itemId, thumbKey, recordingKey } })).json();
+}

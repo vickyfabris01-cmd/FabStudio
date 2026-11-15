@@ -10,11 +10,11 @@ async function must(q) {
   return data;
 }
 
-export const listItems = () => must(sbp.from('items_public').select('*').order('published_at', { ascending: false }).limit(60));
+export const listItems = () => must(sbp.from('items_public').select('*').not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(60));
 export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id', id).maybeSingle());
 // The latest poems other than this one, for "More from Fabris".
 export const listMore = (excludeId) =>
-  must(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId).order('published_at', { ascending: false }).limit(4));
+  must(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId).not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(4));
 export const listComments = (id) =>
   must(sbp.from('comments').select('id,user_id,nickname,body,created_at').eq('item_id', id).order('created_at', { ascending: false }).limit(100));
 
@@ -46,3 +46,8 @@ export function friendly(e) {
   if (/Failed to fetch|NetworkError/i.test(m)) return 'No connection. Please try again.';
   return m || 'Something went wrong.';
 }
+
+// Live sessions (the safe view; chat, requests and the room itself come from the live room).
+export const getLive = (id) => must(sbp.from('live_public').select('*').eq('id', id).maybeSingle());
+// The next or current live, for the banner on the home page.
+export const nextLive = () => must(sbp.from('live_public').select('id,title,state,starts_at').in('state', ['live', 'scheduled']).order('state', { ascending: true }).order('starts_at', { ascending: true, nullsFirst: false }).limit(1)).then((r) => r[0] || null);

@@ -2,6 +2,12 @@
 //  - Owner-only: uploads to the PRIVATE bucket, publish / unpublish / delete.
 //  - Public: streams published files from the PUBLIC bucket (GET /public/...).
 //  - Viewers: merges a guest's reactions and comments into their real account.
+//  - Live (Phase 3): /live/ws (the room), /live/sfu/* (audio through the Cloudflare SFU), /live/assets (replay files).
+
+import { LiveRoom } from './live-room.js';
+import { sfuConfigured, createSession, newTracks, renegotiate, SESSION_RE, TRACK_RE } from './sfu.js';
+
+export { LiveRoom };
 
 const KEY_RE = /^(captures|tunes|bakes|items|thumbs)\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/;
 const PUB_RE = /^pub\/[0-9a-f-]{36}\/(media|thumb)\.[a-z0-9]{2,5}$/;
@@ -54,6 +60,93 @@ function idFrom(value) {
   return value;
 }
 const extOf = (key) => key.slice(key.lastIndexOf('.') + 1);
+
+/* ---------- Live ---------- */
+const SDP_MAX = 60000;
+const sdpFrom = (d, type) => {
+  if (!d || d.type !== type || typeof d.sdp !== 'string' || d.sdp.length > SDP_MAX) throw new HttpError(400, `Expected a ${type}`);
+  return { type, sdp: d.sdp };
+};
+const sfuFail = (r, cors) => json({ error: 'The audio service refused this', detail: String(r.data?.errorDescription || r.data?.errorCode || r.status).slice(0, 200) }, cors, 502);
+
+// Routes that do not need the owner. Each one checks who is calling.
+async function liveRoute(request, env, cors, url) {
+  const path = url.pathname;
+  if (!env.LIVE_ROOM) throw new HttpError(501, 'Live is not set up on this Worker yet (see docs/LIVE.md, section 3)');
+  const room = (item) => {
+    const stub = env.LIVE_ROOM.get(env.LIVE_ROOM.idFromName(item));
+    return (p, init = {}) => {
+      const req = new Request(`https://room${p}`, init.request || { headers: init.headers });
+      req.headers.set('x-item-id', item);
+      return stub.fetch(req);
+    };
+  };
+
+  // The room: browsers connect here. They sign in with the first message (hello), not with a header.
+  if (path === '/live/ws') {
+    if (request.headers.get('Upgrade') !== 'websocket') throw new HttpError(426, 'Expected a WebSocket');
+    if (!cors['Access-Control-Allow-Origin']) throw new HttpError(403, 'This address is not in ALLOWED_ORIGINS');
+    const item = idFrom(url.searchParams.get('item'));
+    return await room(item)('/ws', { request });
+  }
+
+  // Audio. The SFU secret stays here; the browser only ever talks to these routes.
+  if (path.startsWith('/live/sfu/')) {
+    if (!sfuConfigured(env)) throw new HttpError(501, 'The audio service is not set up yet (SFU_APP_ID and SFU_APP_SECRET)');
+    const user = await getUser(bearer(request), env);
+    if (!user) throw new HttpError(401, 'Sign in first');
+    const isOwner = user.id === env.OWNER_USER_ID;
+    const body = await request.json().catch(() => ({}));
+    const item = idFrom(body.item);
+    const info = await (await room(item)('/info')).json();
+
+    // Listening needs a live room, and the viewer mode is enforced here too (not just in the page).
+    const mayListen = () => {
+      if (info.status !== 'live') throw new HttpError(409, 'This live is not on right now');
+      if (!info.broadcaster?.online) throw new HttpError(409, 'The audio is reconnecting');
+      if (info.mode === 'login' && user.is_anonymous && !isOwner) throw new HttpError(403, 'Sign in to listen to this live');
+    };
+
+    if (path === '/live/sfu/session' && request.method === 'POST') {
+      if (isOwner) { if (info.status === 'ended') throw new HttpError(409, 'This live has ended'); }
+      else mayListen();
+      const r = await createSession(env);
+      if (!r.ok || !r.data.sessionId) return sfuFail(r, cors);
+      return json({ sessionId: r.data.sessionId }, cors);
+    }
+
+    if (path === '/live/sfu/tracks' && request.method === 'POST') {
+      const sessionId = String(body.sessionId || '');
+      if (!SESSION_RE.test(sessionId)) throw new HttpError(400, 'Bad session');
+      const t = Array.isArray(body.tracks) && body.tracks.length === 1 ? body.tracks[0] : null;
+      if (!t) throw new HttpError(400, 'One track at a time');
+      let payload;
+      if (t.location === 'local') {
+        // Publishing: the owner only, and one audio track.
+        if (!isOwner) throw new HttpError(403, 'Only the host can broadcast');
+        if (info.status === 'ended') throw new HttpError(409, 'This live has ended');
+        if (!TRACK_RE.test(String(t.trackName || '')) || typeof t.mid !== 'string' || t.mid.length > 16) throw new HttpError(400, 'Bad track');
+        payload = { sessionDescription: sdpFrom(body.sessionDescription, 'offer'), tracks: [{ location: 'local', mid: t.mid, trackName: t.trackName }] };
+      } else if (t.location === 'remote') {
+        // Listening: always the room's current audio track, whatever the browser asked for.
+        mayListen();
+        payload = { tracks: [{ location: 'remote', sessionId: info.broadcaster.sessionId, trackName: info.broadcaster.trackName }] };
+      } else throw new HttpError(400, 'Bad track');
+      const r = await newTracks(env, sessionId, payload);
+      if (!r.ok || r.data.errorCode) return sfuFail(r, cors);
+      return json(r.data, cors);
+    }
+
+    if (path === '/live/sfu/renegotiate' && request.method === 'PUT') {
+      const sessionId = String(body.sessionId || '');
+      if (!SESSION_RE.test(sessionId)) throw new HttpError(400, 'Bad session');
+      const r = await renegotiate(env, sessionId, { sessionDescription: sdpFrom(body.sessionDescription, 'answer') });
+      if (!r.ok || r.data.errorCode) return sfuFail(r, cors);
+      return json(r.data, cors);
+    }
+  }
+  throw new HttpError(404, 'Not found');
+}
 
 async function deleteByPrefix(bucket, prefix) {
   let cursor;
@@ -129,6 +222,9 @@ export default {
         return await servePublic(request, env, decodeURIComponent(path.slice('/public/'.length)));
       }
       if (path === '/viewer/merge' && request.method === 'POST') return await mergeViewer(request, env, cors);
+
+      // ---- live (each route checks who is calling; /live/assets below is owner only)
+      if (path.startsWith('/live/') && path !== '/live/assets') return await liveRoute(request, env, cors, url);
 
       // ---- owner only
       await requireOwner(request, env);
@@ -213,6 +309,34 @@ export default {
           await env.PUBLIC_BUCKET.put(to, obj.body, { httpMetadata: obj.httpMetadata });
         }
         return json({ publicMediaKey, publicThumbKey }, cors);
+      }
+
+      // Live: copies a live item's thumbnail and, once the show is over, its recording to the public bucket.
+      // The recording is the capture FabStudio saved on the laptop (captures/<id>.<ext>).
+      if (path === '/live/assets' && request.method === 'POST') {
+        const b = await request.json();
+        const id = idFrom(b.itemId);
+        const out = {};
+        if (b.thumbKey) {
+          const from = keyFrom(b.thumbKey);
+          if (!from.startsWith(`thumbs/${id}.`)) throw new HttpError(400, 'Thumbnail does not match item');
+          out.publicThumbKey = `pub/${id}/thumb.${extOf(from)}`;
+          const obj = await bucket.get(from);
+          if (!obj) throw new HttpError(404, 'Thumbnail not uploaded yet');
+          await deleteByPrefix(env.PUBLIC_BUCKET, `pub/${id}/thumb.`);
+          await env.PUBLIC_BUCKET.put(out.publicThumbKey, obj.body, { httpMetadata: obj.httpMetadata });
+        }
+        if (b.recordingKey) {
+          const from = keyFrom(b.recordingKey);
+          if (!from.startsWith('captures/')) throw new HttpError(400, 'That is not a recording');
+          out.publicMediaKey = `pub/${id}/media.${extOf(from)}`;
+          const obj = await bucket.get(from);
+          if (!obj) throw new HttpError(404, 'Recording not uploaded yet');
+          await deleteByPrefix(env.PUBLIC_BUCKET, `pub/${id}/media.`);
+          await env.PUBLIC_BUCKET.put(out.publicMediaKey, obj.body, { httpMetadata: obj.httpMetadata });
+        }
+        if (!out.publicThumbKey && !out.publicMediaKey) throw new HttpError(400, 'Nothing to copy');
+        return json(out, cors);
       }
 
       if (path === '/unpublish' && request.method === 'POST') {

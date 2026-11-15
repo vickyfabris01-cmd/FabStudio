@@ -7,9 +7,11 @@ import { startCapture, recoverOrphans, isRecording } from './recorder.js';
 import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, fileChip, popMenu, openModal, micIcon, dotsIcon, stopIcon, pencilIcon, tabIcon } from './ui.js';
 import { publishListView, itemView } from './publish.js';
 import { bakerView, openBakeModal } from './baker.js';
+import { liveListView, liveConsoleView } from './live.js';
+import { engine } from './live-engine.js';
 
 const app = document.getElementById('app');
-const state = { tab: 'poems', poemId: null, itemId: null, prefill: {}, bake: null };
+const state = { tab: 'poems', poemId: null, itemId: null, prefill: {}, bake: null, liveId: null };
 let viewToken = 0;
 let editorFlush = null;
 let disposeView = null;
@@ -94,9 +96,9 @@ function syncText(s) {
 
 function renderShell() {
   const pill = h('button', { class: 'pill', onclick: () => goTab('settings') });
-  const tabs = [['studio', 'Studio'], ['poems', 'Poems'], ['settings', 'Settings']];
+  const tabs = [['studio', 'Studio'], ['poems', 'Poems'], ['live', 'Live'], ['settings', 'Settings']];
   app.replaceChildren(
-    h('header', { class: 'bar' }, h('span', { class: 'brand' }, 'FabStudio'), pill),
+    h('header', { class: 'bar' }, h('span', { class: 'brand' }, 'FabStudio'), h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
     h('main', { id: 'view' }),
     h('nav', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, 'aria-label': l, onclick: () => goTab(k) }, tabIcon(k), h('span', {}, l)))),
   );
@@ -114,20 +116,28 @@ function renderShell() {
   };
   window.addEventListener('sync-state', paintPill);
   paintPill();
+  engine.on(() => {
+    const b = document.getElementById('onair');
+    if (b) b.hidden = !(engine.active && !(state.tab === 'live' && state.liveId));
+  });
   renderView();
 }
 
 function goTab(k) {
   if (isRecording()) return toast('Stop the recording first.');
   state.tab = k;
+  state.liveId = null;
   state.poemId = null;
   state.itemId = null;
   state.bake = null;
   renderView();
 }
-const openPoem = (id) => { state.tab = 'poems'; state.poemId = id; state.itemId = null; state.bake = null; renderView(); };
+const openLive = (id) => { state.tab = 'live'; state.liveId = id; state.poemId = null; state.itemId = null; state.bake = null; renderView(); };
+const openPoem = (id) => { state.tab = 'poems'; state.liveId = null; state.poemId = id; state.itemId = null; state.bake = null; renderView(); };
 const openItem = (id, prefill = {}) => { state.tab = 'studio'; state.itemId = id; state.prefill = prefill; state.poemId = null; state.bake = null; renderView(); };
 const nav = {
+  openLive,
+  liveList: () => { state.liveId = null; renderView(); },
   open: openItem,
   back: () => {
     if (backTo(STUDIO_LIST)) return;
@@ -140,8 +150,9 @@ const nav = {
 
 async function renderView() {
   const token = ++viewToken;
-  const builders = { poems: poemsView, studio: () => publishListView(nav), settings: settingsView };
-  const view = state.poemId ? await editorView(state.poemId)
+  const builders = { poems: poemsView, studio: () => publishListView(nav), live: () => liveListView(nav), settings: settingsView };
+  const view = state.tab === 'live' && state.liveId ? await liveConsoleView(state.liveId, nav)
+    : state.poemId ? await editorView(state.poemId)
     : state.bake ? await bakerView({ poemId: state.bake.poemId, nav })
     : state.itemId ? await itemView(state.itemId, nav, state.prefill)
     : await (builders[state.tab] || poemsView)();
@@ -161,8 +172,8 @@ async function renderView() {
 // through the screens instead of closing the app. On the first screen it does nothing.
 const STUDIO_LIST = { tab: 'studio', poemId: null, itemId: null, bake: null };
 const POEMS_LIST = { tab: 'poems', poemId: null, itemId: null, bake: null };
-const snapNow = () => ({ tab: state.tab, poemId: state.poemId, itemId: state.itemId, bake: state.bake ? { poemId: state.bake.poemId } : null });
-const keyOf = (s) => [s.tab, s.poemId || '', s.itemId || '', s.bake ? 'bake:' + (s.bake.poemId || '') : ''].join('|');
+const snapNow = () => ({ liveId: state.liveId, tab: state.tab, poemId: state.poemId, itemId: state.itemId, bake: state.bake ? { poemId: state.bake.poemId } : null });
+const keyOf = (s) => [s.liveId ? 'live:' + s.liveId : '', s.tab, s.poemId || '', s.itemId || '', s.bake ? 'bake:' + (s.bake.poemId || '') : ''].join('|');
 let historyReady = false;
 let trail = [];       // trail[i] is the screen shown by history entry i. Entry 0 is a guard behind the first screen.
 let at = 0;           // the history entry on show
@@ -241,7 +252,7 @@ window.addEventListener('popstate', async (e) => {
   const snap = st.snap;
   at = target;
   trail[at] = keyOf(snap);
-  Object.assign(state, { tab: snap.tab, poemId: snap.poemId, itemId: snap.itemId, bake: snap.bake, prefill: {} });
+  Object.assign(state, { liveId: snap.liveId || null, tab: snap.tab, poemId: snap.poemId, itemId: snap.itemId, bake: snap.bake, prefill: {} });
   renderView();
 });
 
