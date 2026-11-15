@@ -14,22 +14,26 @@ export const listItems = () => must(sbp.from('items_public').select('*').order('
 export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id', id).maybeSingle());
 export const listComments = (id) =>
   must(sbp.from('comments').select('id,user_id,nickname,body,created_at').eq('item_id', id).order('created_at', { ascending: false }).limit(100));
-export const myReaction = async (id, userId) =>
-  (await must(sbp.from('reactions').select('type').eq('item_id', id).eq('user_id', userId).maybeSingle()))?.type || null;
+
+// A person can give both Like and Love, so this returns a list of types.
+export const myReactions = async (id, userId) =>
+  (await must(sbp.from('reactions').select('type').eq('item_id', id).eq('user_id', userId))).map((r) => r.type);
 export const setReaction = (id, userId, type) =>
-  must(sbp.from('reactions').upsert({ item_id: id, user_id: userId, type }, { onConflict: 'item_id,user_id' }));
-export const clearReaction = (id, userId) => must(sbp.from('reactions').delete().eq('item_id', id).eq('user_id', userId));
+  must(sbp.from('reactions').upsert({ item_id: id, user_id: userId, type }, { onConflict: 'item_id,user_id,type' }));
+export const clearReaction = (id, userId, type) =>
+  must(sbp.from('reactions').delete().eq('item_id', id).eq('user_id', userId).eq('type', type));
 export const postComment = (id, userId, nickname, body) =>
   must(sbp.from('comments').insert({ item_id: id, user_id: userId, nickname, body }));
 export const deleteComment = (commentId) => must(sbp.from('comments').delete().eq('id', commentId));
 
-// Play counts are approximate: one count per browser per item every 12 hours.
-export async function recordPlay(id) {
-  const key = 'fp.played.' + id;
-  const last = Number(localStorage.getItem(key) || 0);
-  if (Date.now() - last < 12 * 3600 * 1000) return;
-  localStorage.setItem(key, String(Date.now()));
-  try { await sbp.rpc('record_play', { p_item: id }); } catch { /* counting is best effort */ }
+// One view per account per poem. The database ignores repeats; the local note only saves a call.
+export async function recordView(id, userId) {
+  const key = `fp.viewed.${userId}.${id}`;
+  if (localStorage.getItem(key)) return;
+  try {
+    await must(sbp.rpc('record_view', { p_item: id }));
+    localStorage.setItem(key, '1');
+  } catch { /* counting is best effort */ }
 }
 
 export const getNickname = () => localStorage.getItem('fp.nick') || '';

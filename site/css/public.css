@@ -53,24 +53,47 @@ video.player { background: #000; aspect-ratio: 16 / 9; }
 .btn:disabled { opacity: .5; }
 .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
 .reacts { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: 1rem 0; }
-.react { font: inherit; display: inline-flex; align-items: center; gap: .4rem; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: .4rem .9rem; min-height: 44px; cursor: pointer; }
-.react[aria-pressed='true'] { border-color: var(--accent); background: rgba(134,196,173,.15); }
+.react { font: inherit; display: inline-flex; align-items: center; gap: .45rem; background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: .4rem .95rem; min-height: 44px; cursor: pointer; }
+.react svg { width: 22px; height: 22px; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.react .ico { display: inline-flex; }
+.react .n { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .9rem; }
+.react.share { margin-left: auto; padding: .4rem .75rem; }
+.react[data-type='love'][aria-pressed='true'] { color: #e5534b; border-color: #e5534b; }
+.react[data-type='love'][aria-pressed='true'] svg { fill: #e5534b; }
+.react[data-type='like'][aria-pressed='true'] { border-color: var(--text); }
+.react[data-type='like'][aria-pressed='true'] svg { fill: currentColor; }
+.react[data-type='comment'][aria-expanded='true'] { border-color: var(--accent); color: var(--accent); }
 .react:disabled { opacity: .5; }
-.react .lbl { font-size: .85rem; }
-.react .n { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .85rem; }
 
 input, textarea { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: .6rem .8rem; width: 100%; min-height: 44px; }
 .compose { display: grid; gap: .6rem; margin: .8rem 0 1.2rem; }
-.comments-box { margin-top: 2rem; }
+.comments-box { margin-top: .2rem; }
+.comment-preview .comment { border-top: 1px solid var(--line); border-bottom: 0; }
+.comments { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); }
 .comment { border-bottom: 1px solid var(--line); padding: .7rem 0; }
 .comment p { margin: .2rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .who { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
 
+
+.gbox { min-height: 44px; display: flex; justify-content: center; }
+.or { display: flex; align-items: center; gap: .8rem; color: var(--muted); font-size: .85rem; margin: 1.1rem 0; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+
+.auth { max-width: 440px; }
+.auth h1 { margin-top: 1.6rem; }
+.auth form { display: grid; gap: .9rem; margin-top: 1.2rem; }
+.field { display: grid; gap: .35rem; font-size: .9rem; color: var(--muted); }
+.btn.block { width: 100%; }
+.right { text-align: right; margin-top: -.4rem; }
+.auth #msg:empty { display: none; }
+.switch { text-align: center; color: var(--muted); margin: 1.4rem 0 1rem; }
+.note { background: rgba(134,196,173,.12); border: 1px solid rgba(134,196,173,.35); color: var(--accent); border-radius: 10px; padding: .7rem .9rem; font-size: .9rem; margin: 1rem 0 0; }
+.back { color: var(--muted); font-size: .9rem; text-decoration: none; }
+.back::before { content: '\2190  '; }
+
 dialog.sheet { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 1.3rem; width: min(92vw, 380px); }
 dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 .sheet-body { display: grid; gap: .8rem; }
-.gbox { min-height: 44px; display: flex; justify-content: center; }
-.or { text-align: center; color: var(--muted); font-size: .85rem; }
 
 .foot { max-width: 720px; margin: 0 auto; padding: 1.5rem 1.1rem 3rem; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); display: flex; justify-content: space-between; flex-wrap: wrap; gap: .6rem; }
 .prose h2 { margin: 1.6rem 0 .3rem; }

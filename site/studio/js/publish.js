@@ -170,7 +170,7 @@ export async function publishListView(nav) {
       for (const c of data || []) {
         const sub = subs.get(c.item_id);
         const r = rows.find((x) => x.id === c.item_id);
-        if (sub && r) sub.textContent = `${c.n_plays} plays, ${c.n_reactions} reactions, ${c.n_comments} comments`;
+        if (sub && r) sub.textContent = `${c.n_views} views, ${c.n_reactions} reactions, ${c.n_comments} comments`;
       }
     }).catch(() => {});
   }
@@ -411,7 +411,7 @@ async function loadEngagement(box, id) {
     const act = (label, fn, cls = '') => h('button', { class: 'btn small ' + cls, onclick: async () => { const { error } = await fn(); if (error) toast(error.message); else reload(); } }, label);
     box.replaceChildren(
       h('h3', {}, 'Reactions and comments'),
-      h('p', {}, `${n.n_plays || 0} plays, ${n.n_reactions || 0} reactions (love ${n.n_love || 0}, like ${n.n_like || 0}, emotional ${n.n_emotional || 0}, funny ${n.n_funny || 0}), ${n.n_comments || 0} comments`),
+      h('p', {}, `${n.n_views || 0} views, ${n.n_reactions || 0} reactions (love ${n.n_love || 0}, like ${n.n_like || 0}), ${n.n_comments || 0} comments`),
       cm.data.length
         ? h('ul', { class: 'list' }, cm.data.map((x) => h('li', { class: 'item col' },
             h('div', {}, h('strong', {}, x.nickname), h('span', { class: 'sub' }, ` ${fmtDate(x.created_at)}${x.hidden ? ', hidden' : ''}`)),

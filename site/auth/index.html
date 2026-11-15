@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14121a">
+  <meta name="robots" content="noindex">
+  <title>Sign in | Fabris Poet</title>
+  <link rel="stylesheet" href="/css/public.css">
+</head>
+<body data-mode="signin">
+  <header class="top">
+    <a class="brand" href="/">Fabris Poet</a>
+    <a class="back" id="back" href="/">Back</a>
+  </header>
+  <main class="wrap auth">
+    <h1>Welcome back</h1>
+    <p class="muted">Sign in to keep your reactions and comments.</p>
+    <form id="form" novalidate>
+      <label class="field">Email
+        <input id="email" type="email" autocomplete="email" inputmode="email" placeholder="name@company.com">
+      </label>
+      <label class="field">Password
+        <input id="password" type="password" autocomplete="current-password" placeholder="Your password">
+      </label>
+      <div class="right"><button type="button" id="forgot" class="btn link">Forgot password?</button></div>
+      <p id="msg" class="error" role="alert"></p>
+      <button id="go" class="btn primary block" type="submit">Sign in</button>
+    </form>
+    <div id="alt" hidden>
+      <div class="or"><span>or</span></div>
+      <div id="gbox" class="gbox"></div>
+    </div>
+    <p class="switch">Don't have an account? <a id="switch" href="/auth/signup/">Create one</a></p>
+    <p id="guestnote" class="note" hidden>You're browsing as a guest. Everything you've done so far moves to your account.</p>
+  </main>
+  <footer class="foot"><span>FabisPot</span><a href="/policies/">Rights and policies</a></footer>
+  <noscript><p class="wrap">Signing in needs JavaScript.</p></noscript>
+  <script src="/shared/vendor/supabase.js"></script>
+  <script type="module" src="/js/auth-page.js"></script>
+</body>
+</html>
