@@ -1,6 +1,6 @@
 // One poem: sliding title, player, time and views, description, Love and Like, comments.
 import { h, fmtDur, fmtAgo, fmtWhen, toast } from '../shared/dom.js';
-import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady } from './auth-ui.js';
+import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady, displayName } from './auth-ui.js';
 import * as data from './data.js';
 
 const svg = (inner, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="${cls}">${inner}</svg>`;
@@ -9,6 +9,7 @@ const ICON = {
   like: svg('<path d="M7 11v8a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-7a1 1 0 0 1 1 -1h3a4 4 0 0 0 4 -4v-1a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 2 0 0 1 -2 2h-7a3 3 0 0 1 -3 -3"/>'),
   comment: svg('<path d="M3 20l1.3 -3.9a9 8 0 1 1 3.4 2.9l-4.7 1"/>'),
   share: svg('<path d="M6 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 6m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 18m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M8.7 10.7l6.6 -3.4"/><path d="M8.7 13.3l6.6 3.4"/>'),
+  send: svg('<path d="M10 14l11 -11"/><path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5"/>'),
   play: svg('<path d="M8 5v14l11 -7z"/>', 'solid'),
   pause: svg('<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>', 'solid'),
 };
@@ -218,27 +219,29 @@ async function main() {
   let open = false;
   const preview = h('div', { class: 'comment-preview' });
   const list = h('div', { class: 'comments' });
-  const nick = h('input', { value: data.getNickname(), placeholder: 'Your nickname', maxlength: 30, 'aria-label': 'Nickname' });
-  const text = h('textarea', { placeholder: 'Write a comment', rows: 3, maxlength: 500, 'aria-label': 'Comment' });
-  const send = h('button', { class: 'btn primary', onclick: async () => {
+  const text = h('textarea', { class: 'chat-input', placeholder: 'Write a comment', rows: 1, maxlength: 500, 'aria-label': 'Comment' });
+  const grow = () => { text.style.height = 'auto'; text.style.height = Math.min(text.scrollHeight, 120) + 'px'; };
+  text.addEventListener('input', grow);
+  const send = h('button', { class: 'send', type: 'button', 'aria-label': 'Send comment', onclick: async () => {
     const body = text.value.trim();
-    const name = nick.value.trim();
-    if (!name) return toast('Add a nickname first.');
     if (!body) return toast('Write something first.');
     const s = await requireAuth();
     if (!s) return;
     send.disabled = true;
     try {
-      await data.saveNickname(name);
-      await data.postComment(id, s.user.id, name, body);
+      // The name is the account name, or "Guest" and the first four characters of the guest id.
+      await data.postComment(id, s.user.id, displayName().slice(0, 30), body);
       text.value = '';
+      grow();
       await loadComments();
       refresh();
     } catch (e) { toast(data.friendly(e)); }
     send.disabled = false;
-  } }, 'Post comment');
+  } });
+  send.innerHTML = ICON.send;
+  send.addEventListener('pointerdown', (e) => e.preventDefault()); // keeps the keyboard open while sending
   const panel = h('div', { class: 'comment-panel' }, list,
-    item.comments_enabled ? h('div', { class: 'compose' }, nick, text, send) : h('p', { class: 'muted' }, 'Comments are closed for this poem.'));
+    item.comments_enabled ? h('div', { class: 'chat' }, text, send) : h('p', { class: 'muted' }, 'Comments are closed for this poem.'));
   panel.hidden = true;
 
   const commentEl = (c, withDelete) => h('div', { class: 'comment' },
@@ -262,6 +265,27 @@ async function main() {
   }
   function toggleComments() { open = !open; paintComments(); }
 
+  /* more from Fabris: the latest other poems, just a thumbnail and a name */
+  const moreGrid = h('div', { class: 'mini-grid' });
+  const moreBox = h('section', { class: 'more' }, h('h2', {}, 'More from Fabris'), moreGrid);
+  moreBox.hidden = true;
+  const miniCard = (it) => {
+    const t = data.mediaUrl(it.public_thumb_key);
+    const badge = h('span', { class: 'badge' });
+    badge.innerHTML = ICON.play;
+    return h('a', { class: 'mini', href: `/poem/?id=${it.id}` },
+      h('div', { class: 'th' }, t ? h('img', { src: t, alt: '', loading: 'lazy' }) : null, badge),
+      h('p', { class: 'nm' }, it.title || 'Untitled'));
+  };
+  async function loadMore() {
+    try {
+      const others = await data.listMore(id);
+      if (!others.length) return;
+      moreGrid.replaceChildren(...others.map(miniCard));
+      moreBox.hidden = false;
+    } catch { /* the section simply stays hidden */ }
+  }
+
   /* page */
   const shareBtn = h('button', { class: 'react share', 'aria-label': 'Share', onclick: async () => {
     const url = `${location.origin}/p/${id}`;
@@ -281,6 +305,7 @@ async function main() {
     description ? description.el : null,
     h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, loveBtn, likeBtn, comBtn, shareBtn),
     h('section', { class: 'comments-box' }, h('h2', { class: 'sr' }, 'Comments'), preview, panel),
+    moreBox,
   ].filter(Boolean));
   paintCounts(item);
   paintComments();
@@ -289,6 +314,7 @@ async function main() {
     if (description) { description.fit(); window.addEventListener('resize', debounce(description.fit, 200)); }
   });
   loadComments();
+  loadMore();
   loadMine();
   onAuth(() => { loadMine(); loadComments(); });
 }

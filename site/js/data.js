@@ -12,6 +12,9 @@ async function must(q) {
 
 export const listItems = () => must(sbp.from('items_public').select('*').order('published_at', { ascending: false }).limit(60));
 export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id', id).maybeSingle());
+// The latest poems other than this one, for "More from Fabris".
+export const listMore = (excludeId) =>
+  must(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId).order('published_at', { ascending: false }).limit(4));
 export const listComments = (id) =>
   must(sbp.from('comments').select('id,user_id,nickname,body,created_at').eq('item_id', id).order('created_at', { ascending: false }).limit(100));
 
@@ -34,12 +37,6 @@ export async function recordView(id, userId) {
     await must(sbp.rpc('record_view', { p_item: id }));
     localStorage.setItem(key, '1');
   } catch { /* counting is best effort */ }
-}
-
-export const getNickname = () => localStorage.getItem('fp.nick') || '';
-export async function saveNickname(nick) {
-  localStorage.setItem('fp.nick', nick);
-  try { await sbp.rpc('set_nickname', { p_nick: nick }); } catch { /* the comment still carries the nickname */ }
 }
 
 // Turns a database error into something a person can read.

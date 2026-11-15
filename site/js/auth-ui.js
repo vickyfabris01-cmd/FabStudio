@@ -2,7 +2,6 @@
 import { CONFIG } from '../shared/config.js';
 import { sbp } from '../shared/supabase-public.js';
 import { h, toast } from '../shared/dom.js';
-import { saveNickname, getNickname } from './data.js';
 
 const STASH = 'fp.guest';
 const listeners = new Set();
@@ -26,8 +25,8 @@ const hex = (bytes) => [...bytes].map((x) => x.toString(16).padStart(2, '0')).jo
 export const displayName = () => {
   const u = session?.user;
   if (!u) return '';
-  if (u.is_anonymous) return getNickname() || 'Guest';
-  return getNickname() || u.user_metadata?.full_name?.split(' ')[0] || (u.email || '').split('@')[0] || 'You';
+  if (u.is_anonymous) return `Guest ${u.id.slice(0, 4)}`;
+  return u.user_metadata?.full_name?.split(' ')[0] || (u.email || '').split('@')[0] || 'You';
 };
 
 /* ---------- start-up ---------- */
@@ -237,15 +236,12 @@ function passwordDialog(title) {
 
 /* ---------- header chip ---------- */
 function openAccount() {
-  const nick = h('input', { value: getNickname() || displayName(), maxlength: 30, 'aria-label': 'Nickname' });
   const close = h('button', { class: 'btn link', onclick: () => dlg.close() }, 'Close');
   const dlg = h('dialog', { class: 'sheet' }, h('div', { class: 'sheet-body' },
     h('h2', {}, 'Your account'),
     h('p', { class: 'muted' }, session?.user?.email || 'Signed in with Google'),
-    h('label', {}, h('span', { class: 'muted small' }, 'Nickname shown on your comments'), nick),
-    h('div', { class: 'row' },
-      h('button', { class: 'btn primary', onclick: async () => { const n = nick.value.trim(); if (n) { await saveNickname(n); notify(); toast('Saved.'); } } }, 'Save'),
-      h('button', { class: 'btn', onclick: async () => { await sbp.auth.signOut(); dlg.close(); toast('Signed out.'); } }, 'Sign out')),
+    h('p', { class: 'muted small' }, `Your comments show as ${displayName()}.`),
+    h('button', { class: 'btn', onclick: async () => { await sbp.auth.signOut(); dlg.close(); toast('Signed out.'); } }, 'Sign out'),
     close));
   dlg.addEventListener('close', () => dlg.remove());
   document.body.append(dlg);

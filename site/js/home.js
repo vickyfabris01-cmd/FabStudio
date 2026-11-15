@@ -1,9 +1,7 @@
-// Fabris Poet home page: the latest published poems.
-import { h, fmtDur, fmtDate } from '../shared/dom.js';
+// Fabris Poet home page: the latest published poems, each as a thumbnail, a name and a date.
+import { h, fmtDate } from '../shared/dom.js';
 import { initAuth, mountAccountChip } from './auth-ui.js';
 import { listItems, mediaUrl, friendly } from './data.js';
-
-const KIND = { audio: 'Audio', video: 'Video', live: 'Live replay' };
 
 function card(it) {
   return h('a', { class: 'card', href: `/poem/?id=${it.id}` },
@@ -12,8 +10,7 @@ function card(it) {
       : h('div', { class: 'cover ph' }),
     h('div', { class: 'card-body' },
       h('h3', {}, it.title || 'Untitled'),
-      h('p', { class: 'meta' }, `${KIND[it.kind] || it.kind}, ${fmtDur(it.duration)}, ${fmtDate(it.published_at)}`),
-      h('p', { class: 'counts' }, `${it.n_views} views, ${it.n_reactions} reactions, ${it.n_comments} comments`)));
+      h('p', { class: 'meta' }, fmtDate(it.published_at))));
 }
 
 async function main() {
