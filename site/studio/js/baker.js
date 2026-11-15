@@ -7,10 +7,6 @@ import { LiveMix, BAKE_TUNE_VOLUME, loadRemix, Remix, rebake } from './mixer.js'
 import { createDraftFromBake, syncDraftFromBake } from './publish.js';
 import { h, fmtDur, fmtDate, extFor, toast, openModal, micIcon, stopIcon } from './ui.js';
 
-const prefs = () => {
-  try { return { raw: false, ...JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}') }; }
-  catch { return { raw: false }; }
-};
 const poemName = (p) => p.title || (p.stanzas?.[0] || '').split('\n')[0] || 'Untitled';
 
 /* ---------- step 1: choose a poem ---------- */
@@ -27,9 +23,11 @@ async function pickPoemView(nav) {
 }
 
 // Opens the microphone the phone picks by itself: an external one when it is connected, otherwise the built-in one.
+// Baking always uses raw audio (no voice processing). With voice processing on, Android switches to call mode and
+// plays the background tune like a call instead of through the soundcard. The tune is mixed digitally, so the
+// echo cancellation is not needed (use headphones).
 function openMic() {
-  const p = prefs();
-  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: !p.raw, noiseSuppression: !p.raw, autoGainControl: !p.raw } });
+  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
 }
 
 /* ---------- step 2: the baking page ---------- */
@@ -99,7 +97,7 @@ export async function bakerView({ poemId, nav }) {
     catch (e) { toast('Microphone unavailable: ' + (e.message || e.name)); return false; }
     try {
       await mix.begin(stream);
-      session = await startCapture({ poemId, stream, raw: prefs().raw });
+      session = await startCapture({ poemId, stream, raw: true });
     } catch (e) {
       stream.getTracks().forEach((tr) => tr.stop());
       toast('Could not start recording: ' + (e.message || e));
