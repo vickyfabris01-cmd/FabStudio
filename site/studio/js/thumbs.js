@@ -46,7 +46,17 @@ export function thumbFromVideo(blob, at = 1) {
 }
 
 function wrap(ctx, text, maxWidth, maxLines) {
-  const words = text.split(/\s+/).filter(Boolean);
+  // A word wider than the card (a file name with underscores, say) is cut into pieces so it never runs off the edge.
+  const words = text.split(/\s+/).filter(Boolean).flatMap((w) => {
+    if (ctx.measureText(w).width <= maxWidth) return [w];
+    const parts = [];
+    let cur = '';
+    for (const ch of w) {
+      if (cur && ctx.measureText(cur + ch).width > maxWidth) { parts.push(cur); cur = ch; } else cur += ch;
+    }
+    if (cur) parts.push(cur);
+    return parts;
+  });
   const lines = [];
   let line = '';
   for (const w of words) {

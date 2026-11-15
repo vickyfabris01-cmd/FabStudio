@@ -24,6 +24,21 @@ export const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' :
 export const fmtDate = (iso) =>
   new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
+// "just now", "5 mins ago", "2 hrs ago", "3 days ago", then the date once it is a month old.
+export function fmtAgo(iso) {
+  const t = Date.parse(iso);
+  if (!t) return '';
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 60) return 'just now';
+  const m = Math.round(sec / 60);
+  if (m < 60) return `${m} min${m === 1 ? '' : 's'} ago`;
+  const hr = Math.round(m / 60);
+  if (hr < 24) return `${hr} hr${hr === 1 ? '' : 's'} ago`;
+  const d = Math.round(hr / 24);
+  if (d < 30) return `${d} day${d === 1 ? '' : 's'} ago`;
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 export function extFor(mime = '', name = '') {
   const m = mime.toLowerCase();
   if (m.includes('webm')) return 'webm';
@@ -116,6 +131,15 @@ const svg = (paths, size = 24) => {
 export const micIcon = (size) => svg(['M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z', 'M5 11a7 7 0 0 0 14 0', 'M12 18v3'], size);
 export const uploadIcon = (size) => svg(['M12 16V4', 'M7 9l5-5 5 5', 'M5 20h14'], size);
 export const dotsIcon = (size) => svg(['M12 5.5v.01', 'M12 12v.01', 'M12 18.5v.01'], size);
+// Same icons as the public poem page, so the two sides look alike.
+export const eyeIcon = (size = 16) => svg(['M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0', 'M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6'], size);
+export const loveIcon = (size = 16) => svg(['M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572'], size);
+export const likeIcon = (size = 16) => svg(['M7 11v8a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-7a1 1 0 0 1 1 -1h3a4 4 0 0 0 4 -4v-1a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 2 0 0 1 -2 2h-7a3 3 0 0 1 -3 -3'], size);
+export const commentIcon = (size = 16) => svg(['M3 20l1.3 -3.9a9 8 0 1 1 3.4 2.9l-4.7 1'], size);
+export const shareIcon = (size = 22) => svg(['M6 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0', 'M18 6m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0', 'M18 18m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0', 'M8.7 10.7l6.6 -3.4', 'M8.7 13.3l6.6 3.4'], size);
+export const pencilIcon = (size = 18) => svg(['M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4', 'M13.5 6.5l4 4'], size);
+export const playIcon = (size = 22) => { const s = svg(['M8 5v14l11 -7z'], size); s.setAttribute('fill', 'currentColor'); return s; };
+export const pauseIcon = (size = 22) => { const s = svg([], size); s.setAttribute('fill', 'currentColor'); for (const x of [6, 14]) { const r = document.createElementNS(NS, 'rect'); r.setAttribute('x', x); r.setAttribute('y', 5); r.setAttribute('width', 4); r.setAttribute('height', 14); r.setAttribute('rx', 1); s.append(r); } return s; };
 export const stopIcon = (size = 18) => { const s = svg([], size); s.setAttribute('fill', 'currentColor'); const r = document.createElementNS(NS, 'rect'); r.setAttribute('x', 6); r.setAttribute('y', 6); r.setAttribute('width', 12); r.setAttribute('height', 12); r.setAttribute('rx', 2); s.append(r); return s; };
 
 // A modal box over the page. Close it with the returned close(); listen for 'modal-close' on box.

@@ -156,7 +156,10 @@ async function pullTable(name) {
   }
 }
 
-export async function syncNow() {
+// Full sync = push waiting changes, then pull what changed elsewhere. Used at start-up, from the
+// Sync now button and after signing in. Automatic syncs (syncSoon, the timer, coming back online)
+// go through syncIfPending below and only push.
+export async function syncNow({ pull = true } = {}) {
   if (running) return;
   running = true;
   try {
@@ -168,8 +171,10 @@ export async function syncNow() {
     for (const n of ORDER) {
       try { await pushTable(n); } catch (e) { pushError = pushError || e; }
     }
-    for (const n of ORDER) {
-      try { await pullTable(n); } catch (e) { pullError = pullError || e; }
+    if (pull) {
+      for (const n of ORDER) {
+        try { await pullTable(n); } catch (e) { pullError = pullError || e; }
+      }
     }
     const failure = pushError || pullError;
     if (failure) throw failure;
@@ -184,12 +189,25 @@ export async function syncNow() {
 // Waits for a sync already in progress, then runs a fresh one. Used before publishing.
 export async function syncAndWait() {
   while (running) await new Promise((r) => setTimeout(r, 300));
-  await syncNow();
+  if (await pendingCount()) await syncNow({ pull: false });
+}
+
+// The automatic sync: runs only when something is waiting to be pushed. With nothing waiting it
+// does nothing at all, so the pill stays quiet. Offline is still shown.
+export async function syncIfPending() {
+  if (running) return;
+  const pending = await pendingCount();
+  if (!navigator.onLine) return emit({ state: 'offline', pending });
+  if (!pending) {
+    if (state.state === 'offline') emit({ state: 'idle', pending: 0 });
+    return;
+  }
+  return syncNow({ pull: false });
 }
 
 export function syncSoon(ms = 3000) {
   clearTimeout(timer);
-  timer = setTimeout(syncNow, ms);
+  timer = setTimeout(syncIfPending, ms);
   pendingCount().then((pending) => emit({ pending }));
 }
 
@@ -198,10 +216,11 @@ export function startSyncLoop() {
   if (loopStarted) return;
   loopStarted = true;
   window.addEventListener('online', () => syncSoon(500));
-  window.addEventListener('offline', () => syncNow());
+  window.addEventListener('offline', () => syncIfPending());
   document.addEventListener('visibilitychange', () => { if (!document.hidden) syncSoon(500); });
-  setInterval(() => { if (!document.hidden) syncNow(); }, 60000);
-  syncNow();
+  // Every minute: look at the local queue only. This retries a failed push and never touches the network when nothing waits.
+  setInterval(() => { if (!document.hidden) syncIfPending(); }, 60000);
+  syncNow(); // once when the app opens: push anything waiting and pull changes from other devices
 }
 
 // Returns the audio file for a row, downloading it from R2 if this device does not have it yet.

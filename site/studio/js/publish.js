@@ -7,7 +7,7 @@ import { syncSoon, syncAndWait } from './sync.js';
 import { unpublishItem, deleteItemFiles, fetchMedia } from './api.js';
 import { requestPublish, jobFor, isBusy, onPublishJobs } from './publisher.js';
 import { thumbFromImage, thumbFromTitle, thumbFromVideo } from './thumbs.js';
-import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, openModal, micIcon, uploadIcon } from './ui.js';
+import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
 
 // One place to change the upload limits.
 export const LIMITS = { videoSeconds: 300, videoMB: 150, audioMB: 100 };
@@ -53,6 +53,7 @@ function itemRow(o) {
     mime: o.mime, duration: o.duration, mediaKey: `items/${o.id}.${extFor(o.mime, o.name || '')}`, thumbKey: `thumbs/${o.id}.jpg`,
     publicMediaKey: null, publicThumbKey: null, status: 'draft', publishedAt: null, commentsEnabled: true, reactionsEnabled: true,
     createdAt: t, updatedAt: t, dirty: 1, remote: 0, blob: o.blob, thumbBlob: o.thumb, mediaPending: 1, thumbPending: 1,
+    thumbKind: o.thumbKind || 'title', needsRepublish: 0,
     ...(o.bakeId ? { bakeId: o.bakeId } : {}),
   };
 }
@@ -82,12 +83,13 @@ export async function createDraftFromFile(kind, file) {
   const problem = await checkSource(file, kind);
   if (problem) throw new Error(problem);
   const duration = await probeDuration(file);
-  const title = file.name.replace(/\.[^.]+$/, '') || 'Untitled';
+  const title = file.name.replace(/\.[^.]+$/, '').replace(/_+/g, ' ').trim() || 'Untitled';
   let thumb;
-  try { thumb = kind === 'video' ? await thumbFromVideo(file) : await thumbFromTitle(title); } catch { thumb = await thumbFromTitle(title); }
+  let thumbKind = 'title';
+  try { if (kind === 'video') { thumb = await thumbFromVideo(file); thumbKind = 'video'; } else thumb = await thumbFromTitle(title); } catch { thumb = await thumbFromTitle(title); thumbKind = 'title'; }
   const id = crypto.randomUUID();
   const mime = file.type || (kind === 'video' ? 'video/mp4' : 'audio/mpeg');
-  await db.items.put(itemRow({ id, kind, title, mime, duration, blob: file, thumb, name: file.name }));
+  await db.items.put(itemRow({ id, kind, title, mime, duration, blob: file, thumb, thumbKind, name: file.name }));
   syncSoon();
   return id;
 }
@@ -98,45 +100,133 @@ export function publishItemNow(id, title = '') {
   return requestPublish(id, title);
 }
 
+/* ---------- shared actions (used by the list menu and the item page) ---------- */
+const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
+
+async function copyLink(id) {
+  const link = `${location.origin}/p/${id}`;
+  try { await navigator.clipboard.writeText(link); toast('Link copied.'); } catch { toast(link); }
+}
+
+// Both return true when the thing was done, false when the person backed out.
+async function unpublishFlow(id) {
+  needNet();
+  if (!confirm('Unpublish? Listeners lose access. Reactions and comments are kept.')) return false;
+  await unpublishItem(id);
+  await db.items.update(id, { status: 'unpublished', publicMediaKey: null, publicThumbKey: null, needsRepublish: 0, updatedAt: now(), dirty: 1 });
+  await syncAndWait();
+  toast('Unpublished.');
+  return true;
+}
+
+async function deleteFlow(id) {
+  const row = await db.items.get(id);
+  if (!row) return false;
+  if (row.remote) {
+    needNet();
+    if (!confirm('Delete this item completely? Its files, reactions and comments are removed for good.')) return false;
+    await deleteItemFiles(id);
+    const { error } = await sb.from('published_items').delete().eq('id', id);
+    if (error) throw error;
+  } else if (!confirm('Delete this draft?')) return false;
+  await db.items.delete(id);
+  await db.uploads.delete(row.mediaKey);
+  await db.uploads.delete(row.thumbKey);
+  toast('Deleted.');
+  return true;
+}
+
+/* ---------- views, reactions and comments (read only here) ---------- */
+const counterCache = new Map(); // item id -> counters row, so a list shows the last numbers at once
+async function loadCounters() {
+  if (!navigator.onLine) return;
+  const { data, error } = await sb.from('counters').select('*');
+  if (error) throw error;
+  for (const c of data || []) counterCache.set(c.item_id, c);
+}
+
+const STAT_DEFS = [[eyeIcon, 'n_views', 'Views'], [loveIcon, 'n_love', 'Love'], [likeIcon, 'n_like', 'Like'], [commentIcon, 'n_comments', 'Comments']];
+function statsEl(c) {
+  const spans = STAT_DEFS.map(([icon, key, label]) => {
+    const n = h('b', {}, '–');
+    const s = h('span', { title: label }, icon(15), n);
+    s._n = n; s._key = key;
+    return s;
+  });
+  const el = h('div', { class: 'stats' }, spans);
+  el.paint = (row) => { for (const s of spans) s._n.textContent = row ? String(row[s._key] || 0) : '–'; };
+  el.paint(c);
+  return el;
+}
+
+const statusText = (r) => (r.status === 'published'
+  ? `Published · ${fmtAgo(r.publishedAt || r.updatedAt)}`
+  : `${STATUS[r.status] || r.status} · edited ${fmtAgo(r.updatedAt)}${r.dirty ? ' · waiting to sync' : ''}`);
+
 /* ---------- list (the Studio tab) ---------- */
 let listFilter = 'all';
 
 export async function publishListView(nav) {
   const all = (await db.items.toArray()).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   const rows = all.filter((r) => (listFilter === 'published' ? r.status === 'published' : listFilter === 'drafts' ? r.status !== 'published' : true));
-  const subs = new Map();
-  const stats = new Map(); // item id -> its status line
+  const stats = new Map(); // item id -> its stat icons
+  const lines = new Map(); // item id -> its status line
   const ends = new Map();  // item id -> the badge that shows the percentage while publishing
+  const agos = [];         // status lines that count time ("1 min ago") and are redrawn now and then
+  const act = async (fn) => { try { if (await fn()) nav.refresh(); } catch (e) { toast(e.message || String(e)); } };
+
   const filters = h('div', { class: 'filters' }, [['all', 'All'], ['drafts', 'Drafts'], ['published', 'Published']].map(([k, l]) =>
     h('button', { class: 'fchip' + (listFilter === k ? ' on' : ''), type: 'button', onclick: () => { listFilter = k; nav.refresh(); } }, l)));
+
+  const rowEl = (r) => {
+    const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' })) : h('div', { class: 'thumb ph' });
+    const job = isBusy(r.id) ? jobFor(r.id) : null;
+    const failed = jobFor(r.id)?.state === 'error';
+    const line = h('div', { class: (failed ? 'sub error' : 'sub') + (r.status === 'published' && !failed ? ' ok' : '') },
+      job ? job.label : failed ? 'Publishing failed. Open it to see why.' : statusText(r));
+    lines.set(r.id, line);
+    if (!job && !failed) agos.push(() => { line.textContent = statusText(r); });
+
+    let end;
+    if (job) {
+      end = h('span', { class: 'badge', style: 'color:var(--accent);border-color:var(--accent)' }, job.pct + '%');
+      ends.set(r.id, end);
+    } else if (r.status === 'published') {
+      const dots = h('button', {
+        class: 'iconbtn', type: 'button', 'aria-label': 'More',
+        onclick: (e) => {
+          e.stopPropagation();
+          popMenu(dots, [
+            { label: 'Open', onclick: () => nav.open(r.id) },
+            { label: 'Copy link', onclick: () => copyLink(r.id) },
+            { label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) },
+            { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
+          ]);
+        },
+      }, dotsIcon(20));
+      end = h('div', { class: 'menuwrap' }, dots);
+    } else {
+      end = h('button', {
+        class: 'btn small primary', type: 'button',
+        onclick: (e) => {
+          e.stopPropagation();
+          requestPublish(r.id, r.title);
+          toast(navigator.onLine ? 'Publishing in the background. You can keep using the app.' : 'It will publish when you are back online.');
+        },
+      }, 'Publish');
+    }
+
+    const body = h('div', { class: 'grow' }, h('div', { class: 'title' }, r.title || 'Untitled'), line);
+    if (r.status === 'published' && !job) {
+      const st = statsEl(counterCache.get(r.id));
+      stats.set(r.id, st);
+      body.append(st);
+    }
+    return h('li', { class: 'item', onclick: () => nav.open(r.id) }, thumb, body, end);
+  };
+
   const list = rows.length
-    ? h('ul', { class: 'list' }, rows.map((r) => {
-        const sub = h('div', { class: 'sub' }, `${r.kind}, ${fmtDur(r.duration)}, edited ${fmtDate(r.updatedAt)}${r.dirty ? ', waiting to sync' : ''}`);
-        subs.set(r.id, sub);
-        const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' })) : h('div', { class: 'thumb ph' });
-        const job = isBusy(r.id) ? jobFor(r.id) : null;
-        const failed = jobFor(r.id)?.state === 'error';
-        const stat = h('div', { class: failed ? 'sub error' : 'sub' }, job ? job.label : failed ? 'Publishing failed. Open it to see why.' : (STATUS[r.status] || r.status));
-        stats.set(r.id, stat);
-        let end;
-        if (r.status === 'published') {
-          end = h('span', { class: 'badge', 'data-status': r.status }, STATUS[r.status]);
-        } else if (job) {
-          end = h('span', { class: 'badge', style: 'color:var(--accent);border-color:var(--accent)' }, job.pct + '%');
-          ends.set(r.id, end);
-        } else {
-          end = h('button', {
-            class: 'btn small primary', type: 'button',
-            onclick: (e) => {
-              e.stopPropagation();
-              requestPublish(r.id, r.title);
-              toast(navigator.onLine ? 'Publishing in the background. You can keep using the app.' : 'It will publish when you are back online.');
-            },
-          }, 'Publish');
-        }
-        return h('li', { class: 'item', onclick: () => nav.open(r.id) }, thumb,
-          h('div', { class: 'grow' }, h('div', { class: 'title' }, r.title || 'Untitled'), stat, sub), end);
-      }))
+    ? h('ul', { class: 'list studio-list' }, rows.map(rowEl))
     : h('p', { class: 'empty' }, listFilter === 'all'
         ? 'Nothing here yet. Tap Bake to record a poem over its tune, or use the upload button to add an audio or video file.'
         : 'Nothing in this view.');
@@ -164,34 +254,33 @@ export async function publishListView(nav) {
     h('div', { class: 'toolbar' }, h('h2', {}, 'Studio'),
       h('div', { class: 'row' }, live, h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake'))),
     filters, list, upload);
-  if (navigator.onLine && rows.some((r) => r.status === 'published')) {
-    sb.from('counters').select('*').then(({ data }) => {
-      for (const c of data || []) {
-        const sub = subs.get(c.item_id);
-        const r = rows.find((x) => x.id === c.item_id);
-        if (sub && r) sub.textContent = `${c.n_views} views, ${c.n_reactions} reactions, ${c.n_comments} comments`;
-      }
-    }).catch(() => {});
+
+  if (navigator.onLine && stats.size) {
+    loadCounters().then(() => { for (const [id, st] of stats) st.paint(counterCache.get(id)); }).catch(() => {});
   }
+  const clock = setInterval(() => { if (el.isConnected) agos.forEach((f) => f()); }, 30000);
+
   // Live percentage on each row while it publishes. When a job starts or ends, the list is redrawn.
-  el._dispose = onPublishJobs((job) => {
+  const off = onPublishJobs((job) => {
     if (!el.isConnected) return;
     if (job.state === 'done' || job.state === 'error') return nav.refresh();
     const end = ends.get(job.id);
     if (!end) {
-      if (rows.some((r) => r.id === job.id && r.status !== 'published')) nav.refresh(); // started somewhere else
+      if (rows.some((r) => r.id === job.id)) nav.refresh(); // started somewhere else
       return;
     }
     end.textContent = job.pct + '%';
-    const stat = stats.get(job.id);
-    if (stat) stat.textContent = job.label;
+    const line = lines.get(job.id);
+    if (line) line.textContent = job.label;
   });
+  el._dispose = () => { clearInterval(clock); off(); };
   return el;
 }
 
 /* ---------- item editor ---------- */
 export async function itemView(id, nav, prefill = {}) {
   const existing = await db.items.get(id);
+  if (existing) return existingView(existing, nav);
   const poems = (await db.poems.toArray()).filter((p) => !p.deletedAt).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   const baked = (await db.bakes.toArray()).filter((b) => !b.deletedAt && b.blob).sort(newest);
   const poemById = new Map(poems.map((p) => [p.id, p]));
@@ -212,17 +301,13 @@ export async function itemView(id, nav, prefill = {}) {
   const back = h('button', { class: 'btn small', onclick: () => nav.back() }, '← Studio');
   const root = h('section', { class: 'view' }, h('div', { class: 'toolbar' }, back));
 
-  if (existing) {
-    await existingUI(root, existing, { title, desc, poemSel, comments, reactions, details }, nav, snapshot);
-    return root;
-  }
-
   /* new item: choose source, thumbnail, details, then save as draft */
   let src = null;     // { kind, blob, mime, duration, name }
   let thumb = null;   // JPEG blob
+  let thumbKind = 'title'; // where it came from: title, image or video
   const srcInfo = h('p', { class: 'muted' }, 'Choose what to publish.');
   const preview = h('img', { class: 'thumb big', alt: 'Thumbnail preview', hidden: true });
-  const showThumb = (blob) => { thumb = blob; withUrl(blob, preview); preview.hidden = false; };
+  const showThumb = (blob, kind = 'custom') => { thumb = blob; thumbKind = kind; withUrl(blob, preview); preview.hidden = false; };
   const bakeSel = h('select', { hidden: true, 'aria-label': 'Baked poem' }, baked.map((b) => {
     const p = poemById.get(b.poemId);
     return h('option', { value: b.id }, `${p ? poemLabel(p) : 'Poem'}, ${fmtDate(b.createdAt)}, ${fmtDur(b.duration)}`);
@@ -230,7 +315,7 @@ export async function itemView(id, nav, prefill = {}) {
   const setSource = async (s) => {
     src = s;
     srcInfo.textContent = `${s.kind === 'video' ? 'Video' : 'Audio'}, ${fmtDur(s.duration)}, ${fmtSize(s.blob.size)}`;
-    if (s.kind === 'video') { try { showThumb(await thumbFromVideo(s.blob)); } catch { /* choose another thumbnail */ } }
+    if (s.kind === 'video') { try { showThumb(await thumbFromVideo(s.blob), 'video'); } catch { /* choose another thumbnail */ } }
   };
   const useBake = async (b) => {
     if (!b) return toast('No baked audio yet. Bake a poem first.');
@@ -255,9 +340,9 @@ export async function itemView(id, nav, prefill = {}) {
 
   const thumbPanel = h('div', { class: 'panel' }, h('h3', {}, '2. Thumbnail'),
     h('div', { class: 'seg' },
-      h('button', { class: 'btn', onclick: async () => { const f = await pickFile('image/*'); if (f) try { showThumb(await thumbFromImage(f)); } catch (e) { toast(e.message); } } }, 'Upload image'),
-      h('button', { class: 'btn', onclick: async () => { try { showThumb(await thumbFromTitle(title.value.trim() || 'Untitled')); } catch (e) { toast(e.message); } } }, 'From title'),
-      h('button', { class: 'btn', onclick: async () => { if (src?.kind !== 'video') return toast('Pick a video first.'); try { showThumb(await thumbFromVideo(src.blob)); } catch (e) { toast(e.message); } } }, 'Video frame')),
+      h('button', { class: 'btn', onclick: async () => { const f = await pickFile('image/*'); if (f) try { showThumb(await thumbFromImage(f), 'image'); } catch (e) { toast(e.message); } } }, 'Upload image'),
+      h('button', { class: 'btn', onclick: async () => { try { showThumb(await thumbFromTitle(title.value.trim() || 'Untitled'), 'title'); } catch (e) { toast(e.message); } } }, 'From title'),
+      h('button', { class: 'btn', onclick: async () => { if (src?.kind !== 'video') return toast('Pick a video first.'); try { showThumb(await thumbFromVideo(src.blob), 'video'); } catch (e) { toast(e.message); } } }, 'Video frame')),
     preview);
 
   const save = h('button', {
@@ -276,6 +361,7 @@ export async function itemView(id, nav, prefill = {}) {
           publicMediaKey: null, publicThumbKey: null, status: 'draft', publishedAt: null,
           commentsEnabled: comments.checked, reactionsEnabled: reactions.checked,
           createdAt: t, updatedAt: t, dirty: 1, remote: 0, blob: src.blob, thumbBlob: blob, mediaPending: 1, thumbPending: 1,
+          thumbKind: thumb ? thumbKind : 'title', needsRepublish: 0,
         });
         syncSoon();
         toast('Draft saved. It uploads when you are online.');
@@ -289,138 +375,290 @@ export async function itemView(id, nav, prefill = {}) {
   return root;
 }
 
-/* ---------- saved item ---------- */
-async function existingUI(root, item, f, nav) {
-  const id = item.id;
-  const status = h('span', { class: 'badge', 'data-status': item.status }, STATUS[item.status]);
-  const thumb = item.thumbBlob ? withUrl(item.thumbBlob, h('img', { class: 'thumb big', alt: 'Thumbnail' })) : h('div', { class: 'thumb big ph' });
-  const play = playButton(async () => {
-    const row = await db.items.get(id);
-    if (row.blob) return row.blob;
-    try { const b = await fetchMedia(row.mediaKey); await db.items.update(id, { blob: b }); return b; } catch { return null; }
-  });
-  const busyButtons = [];
-  const guarded = (fn) => async () => {
-    busyButtons.forEach((b) => { b.disabled = true; });
-    try { await fn(); } catch (e) { toast(e.message || String(e)); }
-    finally { nav.refresh(); }
+/* ---------- saved item: the page for one item ---------- */
+// Reads like the public poem page: title, picture with play, when it went out, description, the numbers
+// (read only), share. Only the title and description are edited here, each with its pen.
+async function existingView(first, nav) {
+  const id = first.id;
+  let item = first;
+  const root = h('section', { class: 'view item-page' });
+  const disposers = [];
+  root._dispose = () => disposers.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+  // Node.replaceChildren turns null into the text "null", so empty slots are dropped first.
+  const put = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false));
+  const penBtn = (label, onclick) => h('button', { class: 'iconbtn accent', type: 'button', 'aria-label': label, onclick }, pencilIcon(18));
+  const published = () => item.status === 'published';
+
+  /* title */
+  const titleText = h('h2', { class: 'item-title' });
+  const titleBox = h('div', { class: 'edit-row' });
+  const showTitle = () => {
+    titleText.textContent = item.title || 'Untitled';
+    titleBox.classList.remove('editing');
+    put(titleBox, titleText, penBtn('Edit title', editTitle));
   };
-  const saveMeta = async () => {
-    await db.items.update(id, {
-      title: f.title.value.trim(), description: f.desc.value.trim(), poemId: f.poemSel.value || null,
-      commentsEnabled: f.comments.checked, reactionsEnabled: f.reactions.checked, updatedAt: now(), dirty: 1,
-    });
-  };
-  const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
-
-  // Publishing is queued and runs in the background, so this returns at once.
-  const publish = h('button', { class: 'btn primary', onclick: guarded(async () => {
-    await saveMeta();
-    requestPublish(id, f.title.value.trim());
-    toast(navigator.onLine ? 'Publishing in the background. You can leave this page.' : 'Saved. It will publish when you are back online.');
-  }) }, item.status === 'published' ? 'Update and republish' : 'Publish');
-
-  const unpublish = h('button', { class: 'btn', onclick: guarded(async () => {
-    needNet();
-    if (!confirm('Unpublish? Listeners lose access. Reactions and comments are kept.')) return;
-    await unpublishItem(id);
-    await db.items.update(id, { status: 'unpublished', publicMediaKey: null, publicThumbKey: null, updatedAt: now(), dirty: 1 });
-    await syncAndWait();
-    toast('Unpublished.');
-  }) }, 'Unpublish');
-
-  const del = h('button', { class: 'btn danger', onclick: guarded(async () => {
-    const row = await db.items.get(id);
-    if (row.remote) {
-      needNet();
-      if (!confirm('Delete this item completely? Its files, reactions and comments are removed for good.')) return;
-      await deleteItemFiles(id);
-      const { error } = await sb.from('published_items').delete().eq('id', id);
-      if (error) throw error;
-    } else if (!confirm('Delete this draft?')) return;
-    await db.items.delete(id);
-    await db.uploads.delete(row.mediaKey);
-    await db.uploads.delete(row.thumbKey);
-    nav.back();
-    toast('Deleted.');
-  }) }, 'Delete');
-
-  const saveBtn = h('button', { class: 'btn', onclick: guarded(async () => { await saveMeta(); syncSoon(); toast('Saved.'); }) }, 'Save changes');
-  const refreshText = h('button', { class: 'btn', onclick: guarded(async () => {
-    await db.items.update(id, { ...(await snapshot(f.poemSel.value || null)), updatedAt: now(), dirty: 1 });
+  async function changeTitle(t) {
+    const patch = { title: t, updatedAt: now(), dirty: 1 };
+    // The thumbnail card shows the title, so it is redrawn with it. Pictures you chose yourself stay.
+    let kind = item.thumbKind;
+    if (!kind) kind = confirm('Also update the thumbnail card to show the new title?\nChoose Cancel to keep the current picture.') ? 'title' : 'custom';
+    if (kind === 'title') {
+      patch.thumbBlob = await thumbFromTitle(t);
+      patch.thumbPending = 1;
+      if (published()) patch.needsRepublish = 1;
+    }
+    patch.thumbKind = kind;
+    await db.items.update(id, patch);
+    item = await db.items.get(id);
     syncSoon();
-    toast('Poem text will update on the public page.');
-  }) }, 'Refresh poem text');
-  busyButtons.push(publish, unpublish, del, saveBtn, refreshText);
+    setThumb();
+    showTitle();
+    paintStatus();
+    paintActions();
+    toast('Saved.');
+  }
+  function editTitle() {
+    const input = h('input', { value: item.title || '', 'aria-label': 'Title', maxlength: 120 });
+    const save = h('button', { class: 'btn small primary', type: 'button' }, 'Save');
+    const cancel = h('button', { class: 'btn small', type: 'button', onclick: showTitle }, 'Cancel');
+    const go = async () => {
+      const t = input.value.trim();
+      if (!t) return toast('Give it a title.');
+      if (t === (item.title || '')) return showTitle();
+      save.disabled = true;
+      try { await changeTitle(t); } catch (e) { toast(e.message || String(e)); save.disabled = false; }
+    };
+    save.onclick = go;
+    input.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+    titleBox.classList.add('editing');
+    put(titleBox, h('div', { class: 'edit-form' }, input, h('div', { class: 'row' }, save, cancel)));
+    input.focus();
+    input.select();
+  }
 
-  // Progress of a publish that is running (it carries on if you leave this page).
-  const job = jobFor(id);
-  const busy = isBusy(id);
+  /* picture, with play (audio gets a seek bar, video plays in place) */
+  const img = h('img', { class: 'cover', alt: 'Thumbnail' });
+  const noThumb = h('div', { class: 'cover ph' });
+  const wrap = h('div', { class: 'cover-wrap' });
+  let thumbUrl = null;
+  function setThumb() {
+    if (wrap.querySelector('video')) return;
+    if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+    thumbUrl = null;
+    if (item.thumbBlob) {
+      thumbUrl = URL.createObjectURL(item.thumbBlob);
+      img.src = thumbUrl;
+      if (!img.isConnected) wrap.prepend(img);
+      noThumb.remove();
+    } else if (!noThumb.isConnected && !img.isConnected) wrap.prepend(noThumb);
+  }
+  setThumb();
+  if (!item.thumbBlob && navigator.onLine) {
+    fetchMedia(item.thumbKey).then(async (b) => { await db.items.update(id, { thumbBlob: b }); item = await db.items.get(id); setThumb(); }).catch(() => {});
+  }
+
+  const getBlob = async () => {
+    const row = await db.items.get(id);
+    if (row?.blob) return row.blob;
+    try { const b = await fetchMedia(row.mediaKey); await db.items.update(id, { blob: b }); return b; } catch { return null; }
+  };
+  const playBtn = h('button', { class: 'cover-play', type: 'button', 'aria-label': 'Play' }, playIcon(26));
+  wrap.append(playBtn);
+  let audio = null;
+  let mediaUrl = null;
+  let seeking = false;
+  const cur = h('span', {}, '0:00');
+  const tot = h('span', {}, fmtDur(item.duration));
+  const seek = h('input', { type: 'range', min: 0, max: 1000, value: 0, step: 1, 'aria-label': 'Seek' });
+  if (item.kind !== 'video') wrap.append(h('div', { class: 'cover-bar' }, cur, seek, tot));
+  const lenOf = () => (audio && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : item.duration || 0);
+  seek.oninput = () => { seeking = true; cur.textContent = fmtDur((seek.value / 1000) * lenOf()); };
+  seek.onchange = () => { if (audio) audio.currentTime = (seek.value / 1000) * lenOf(); seeking = false; };
+
+  playBtn.onclick = async () => {
+    if (item.kind === 'video') {
+      if (mediaUrl) return;
+      playBtn.disabled = true;
+      const blob = await getBlob();
+      playBtn.disabled = false;
+      if (!blob) return toast('Not on this device yet. Connect to the internet to download it.');
+      mediaUrl = URL.createObjectURL(blob);
+      const v = h('video', { class: 'cover', controls: true, playsinline: true });
+      if (thumbUrl) v.poster = thumbUrl;
+      v.src = mediaUrl;
+      wrap.replaceChildren(v);
+      v.play().catch(() => {});
+      return;
+    }
+    if (audio) { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); return; }
+    playBtn.disabled = true;
+    const blob = await getBlob();
+    playBtn.disabled = false;
+    if (!blob) return toast('Not on this device yet. Connect to the internet to download it.');
+    mediaUrl = URL.createObjectURL(blob);
+    audio = new Audio(mediaUrl);
+    audio.onplay = () => playBtn.replaceChildren(pauseIcon(26));
+    audio.onpause = () => playBtn.replaceChildren(playIcon(26));
+    audio.onended = () => { playBtn.replaceChildren(playIcon(26)); seek.value = 0; cur.textContent = '0:00'; };
+    audio.ontimeupdate = () => {
+      if (seeking) return;
+      const len = lenOf();
+      cur.textContent = fmtDur(audio.currentTime);
+      if (len) seek.value = Math.min(1000, Math.round((audio.currentTime / len) * 1000));
+    };
+    audio.onerror = () => toast('This audio could not be played.');
+    audio.play().catch(() => {});
+  };
+  disposers.push(() => { audio?.pause(); if (mediaUrl) URL.revokeObjectURL(mediaUrl); if (thumbUrl) URL.revokeObjectURL(thumbUrl); });
+
+  /* when it went out */
+  const status = h('div', { class: 'sub' });
+  function paintStatus() {
+    status.className = 'sub' + (published() ? ' ok' : '');
+    status.textContent = published()
+      ? `Published · ${fmtAgo(item.publishedAt || item.updatedAt)}`
+      : `${STATUS[item.status] || item.status} · edited ${fmtAgo(item.updatedAt)}`;
+  }
+  const clock = setInterval(() => { if (root.isConnected) paintStatus(); }, 30000);
+  disposers.push(() => clearInterval(clock));
+
+  /* description: one line with "more...", opens to the whole text */
+  let open = false;
+  const descP = h('p', { class: 'desc' });
+  const more = h('button', { class: 'linkbtn', type: 'button', onclick: () => { open = !open; paintDesc(); } });
+  const descBox = h('div', { class: 'edit-row' });
+  function paintDesc() {
+    const d = item.description || '';
+    descBox.classList.remove('editing');
+    descP.className = d ? 'desc' + (open ? '' : ' clamp') : 'desc muted';
+    descP.textContent = d || 'No description yet.';
+    more.hidden = !d || !(open || d.length > 40 || d.includes('\n'));
+    more.textContent = open ? 'less' : 'more...';
+    put(descBox, h('div', { class: 'grow' }, descP, more), penBtn('Edit description', editDesc));
+  }
+  function editDesc() {
+    const ta = h('textarea', { rows: 4, 'aria-label': 'Description', placeholder: 'Short description (optional)', maxlength: 1000 });
+    ta.value = item.description || '';
+    const save = h('button', { class: 'btn small primary', type: 'button' }, 'Save');
+    save.onclick = async () => {
+      save.disabled = true;
+      try {
+        await db.items.update(id, { description: ta.value.trim(), updatedAt: now(), dirty: 1 });
+        item = await db.items.get(id);
+        syncSoon();
+        paintDesc();
+        paintStatus();
+        toast('Saved.');
+      } catch (e) { toast(e.message || String(e)); save.disabled = false; }
+    };
+    descBox.classList.add('editing');
+    put(descBox, h('div', { class: 'edit-form' }, ta, h('div', { class: 'row' }, save, h('button', { class: 'btn small', type: 'button', onclick: paintDesc }, 'Cancel'))));
+    ta.focus();
+  }
+
+  /* numbers (read only) and share */
+  const numbers = statsEl(counterCache.get(id));
+  const statRow = h('div', { class: 'statrow' }, numbers, h('span', { class: 'grow' }),
+    h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Copy link', onclick: () => copyLink(id) }, shareIcon(22)));
+  const commentsBox = h('div', { class: 'panel', hidden: true });
+
+  /* publishing progress (it carries on if you leave the page) */
+  const progressSlot = h('div', {});
+  let job = jobFor(id);
+  let busy = isBusy(id);
   const pLabel = h('span', { class: 'grow' }, job?.label || '');
   const pPct = h('strong', {}, (job?.pct || 0) + '%');
   const pBar = h('progress', { max: 100, value: job?.pct || 0 });
-  const progress = busy
-    ? h('div', { class: 'panel' }, h('h3', {}, 'Publishing'), h('div', { class: 'row' }, pLabel, pPct), pBar,
-        h('p', { class: 'muted small' }, 'This keeps going in the background. You can leave this page.'))
-    : null;
-  const failed = job && job.state === 'error' ? h('p', { class: 'error' }, 'Publishing failed: ' + job.error) : null;
+  function paintProgress() {
+    job = jobFor(id);
+    busy = isBusy(id);
+    pLabel.textContent = job?.label || '';
+    pPct.textContent = (job?.pct || 0) + '%';
+    pBar.value = job?.pct || 0;
+    put(progressSlot,
+      busy ? h('div', { class: 'panel' }, h('h3', {}, 'Publishing'), h('div', { class: 'row' }, pLabel, pPct), pBar,
+        h('p', { class: 'muted small' }, 'This keeps going in the background. You can leave this page.')) : null,
+      !busy && job?.state === 'error' ? h('p', { class: 'error' }, 'Publishing failed: ' + job.error) : null);
+  }
 
-  const actions = h('div', { class: 'panel' }, h('h3', {}, 'Actions'),
-    h('div', { class: 'seg' }, ...(busy ? [] : item.status === 'published' ? [publish, unpublish, refreshText] : [publish]), saveBtn),
-    !busy && (item.mediaPending || item.thumbPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
-    busy ? null : del);
+  /* actions */
+  const actions = h('div', { class: 'panel' });
+  const guarded = (fn) => async () => {
+    actions.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try { await fn(); } catch (e) { toast(e.message || String(e)); }
+    finally { nav.refresh(); }
+  };
+  const flag = (label, key) => {
+    const cb = h('input', { type: 'checkbox', checked: item[key] !== false });
+    cb.onchange = async () => {
+      await db.items.update(id, { [key]: cb.checked, updatedAt: now(), dirty: 1 });
+      item = await db.items.get(id);
+      syncSoon();
+      toast('Saved.');
+    };
+    return h('label', { class: 'row check' }, cb, h('span', {}, label));
+  };
+  function paintActions() {
+    const go = () => { requestPublish(id, item.title); toast(navigator.onLine ? 'Publishing in the background. You can leave this page.' : 'Saved. It will publish when you are back online.'); };
+    const buttons = [];
+    if (!published()) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Publish'));
+    if (published() && item.needsRepublish) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Update and republish'));
+    if (published()) buttons.push(h('button', { class: 'btn', type: 'button', onclick: guarded(async () => { await unpublishFlow(id); }) }, 'Unpublish'));
+    put(actions,
+      h('h3', {}, 'Actions'),
+      flag('Allow comments', 'commentsEnabled'),
+      flag('Allow reactions', 'reactionsEnabled'),
+      published() && item.needsRepublish ? h('p', { class: 'muted small' }, 'The thumbnail changed. Update to show it on the public page.') : null,
+      !busy && (item.mediaPending || item.thumbPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
+      busy ? null : h('div', { class: 'stack' }, buttons,
+        h('button', { class: 'btn danger', type: 'button', onclick: guarded(async () => { if (await deleteFlow(id)) nav.back(); }) }, 'Delete')));
+  }
 
-  // The picture sits on its own line, so a long title can never push the page wider than the screen.
-  root.append(
-    thumb,
-    h('div', { class: 'row top' }, h('div', { class: 'grow' }, h('h2', { style: 'overflow-wrap:anywhere' }, item.title || 'Untitled'), status,
-      h('div', { class: 'sub' }, `${item.kind}, ${fmtDur(item.duration)}`)), play),
-    progress, failed, f.details, actions);
+  /* put the page together */
+  showTitle();
+  paintStatus();
+  paintDesc();
+  paintProgress();
+  paintActions();
+  put(root,
+    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio')),
+    titleBox, wrap, status, descBox,
+    published() ? statRow : null,
+    progressSlot, actions, commentsBox);
 
-  root._dispose = onPublishJobs((j) => {
+  disposers.push(onPublishJobs((j) => {
     if (j.id !== id || !root.isConnected) return;
     if (j.state === 'done' || j.state === 'error' || !busy) return nav.refresh();
-    pLabel.textContent = j.label;
-    pPct.textContent = j.pct + '%';
-    pBar.value = j.pct;
-  });
+    paintProgress();
+  }));
 
-  if (item.status === 'published') {
-    const link = `${location.origin}/p/${id}`;
-    root.append(h('div', { class: 'panel' }, h('h3', {}, 'Share link'),
-      h('input', { value: link, readonly: true, 'aria-label': 'Share link', onfocus: (e) => e.target.select() }),
-      h('button', { class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(link); toast('Link copied.'); } catch { toast('Press and hold the link to copy it.'); } } }, 'Copy link')));
-    const box = h('div', { class: 'panel' }, h('h3', {}, 'Reactions and comments'), h('p', { class: 'muted small' }, 'Loading…'));
-    root.append(box);
-    loadEngagement(box, id);
+  if (published()) loadNumbers();
+  async function loadNumbers() {
+    if (!navigator.onLine) return;
+    try {
+      const [, cm] = await Promise.all([
+        loadCounters(),
+        sb.from('comments').select('*').eq('item_id', id).order('created_at', { ascending: false }).limit(100),
+      ]);
+      numbers.paint(counterCache.get(id));
+      if (cm.error) throw cm.error;
+      showComments(cm.data || []);
+    } catch { /* the numbers stay as they were */ }
   }
-}
-
-async function loadEngagement(box, id) {
-  if (!navigator.onLine) { box.querySelector('p').textContent = 'Connect to see reactions and comments.'; return; }
-  const reload = () => loadEngagement(box, id);
-  try {
-    const [c, cm] = await Promise.all([
-      sb.from('counters').select('*').eq('item_id', id).maybeSingle(),
-      sb.from('comments').select('*').eq('item_id', id).order('created_at', { ascending: false }).limit(100),
-    ]);
-    if (c.error) throw c.error;
-    if (cm.error) throw cm.error;
-    const n = c.data || {};
-    const act = (label, fn, cls = '') => h('button', { class: 'btn small ' + cls, onclick: async () => { const { error } = await fn(); if (error) toast(error.message); else reload(); } }, label);
-    box.replaceChildren(
-      h('h3', {}, 'Reactions and comments'),
-      h('p', {}, `${n.n_views || 0} views, ${n.n_reactions || 0} reactions (love ${n.n_love || 0}, like ${n.n_like || 0}), ${n.n_comments || 0} comments`),
-      cm.data.length
-        ? h('ul', { class: 'list' }, cm.data.map((x) => h('li', { class: 'item col' },
-            h('div', {}, h('strong', {}, x.nickname), h('span', { class: 'sub' }, ` ${fmtDate(x.created_at)}${x.hidden ? ', hidden' : ''}`)),
-            h('div', {}, x.body),
-            h('div', { class: 'seg' },
-              act(x.hidden ? 'Show' : 'Hide', () => sb.from('comments').update({ hidden: !x.hidden }).eq('id', x.id)),
-              act('Delete', () => sb.from('comments').delete().eq('id', x.id), 'danger'),
-              act('Block viewer', () => sb.from('viewer_profiles').upsert({ user_id: x.user_id, nickname: x.nickname, blocked: true }), 'danger')))))
-        : h('p', { class: 'muted small' }, 'No comments yet.'));
-  } catch (e) {
-    box.querySelector('p').textContent = 'Could not load: ' + (e.message || e);
+  // Moderation stays here, because comments are only made on the public page. The panel shows only when there are comments.
+  function showComments(list) {
+    commentsBox.hidden = !list.length;
+    if (!list.length) return;
+    const run = (label, fn, cls = '') => h('button', { class: 'btn small ' + cls, type: 'button', onclick: async () => { const { error } = await fn(); if (error) toast(error.message); else loadNumbers(); } }, label);
+    put(commentsBox,
+      h('h3', {}, 'Comments'),
+      h('ul', { class: 'list' }, list.map((x) => h('li', { class: 'item col' },
+        h('div', {}, h('strong', {}, x.nickname), h('span', { class: 'sub' }, ` ${fmtDate(x.created_at)}${x.hidden ? ', hidden' : ''}`)),
+        h('div', {}, x.body),
+        h('div', { class: 'seg' },
+          run(x.hidden ? 'Show' : 'Hide', () => sb.from('comments').update({ hidden: !x.hidden }).eq('id', x.id)),
+          run('Delete', () => sb.from('comments').delete().eq('id', x.id), 'danger'),
+          run('Block viewer', () => sb.from('viewer_profiles').upsert({ user_id: x.user_id, nickname: x.nickname, blocked: true }), 'danger'))))));
   }
+  return root;
 }

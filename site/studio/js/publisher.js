@@ -137,7 +137,7 @@ async function attempt(job) {
   change(job, { label: 'Finishing', pct: 95 });
   await db.items.update(id, {
     status: 'published', publishedAt: row.publishedAt || now(), publicMediaKey: out.publicMediaKey,
-    publicThumbKey: out.publicThumbKey, ...(await snapshot(row.poemId)), publishRequested: 0, updatedAt: now(), dirty: 1,
+    publicThumbKey: out.publicThumbKey, ...(await snapshot(row.poemId)), publishRequested: 0, needsRepublish: 0, updatedAt: now(), dirty: 1,
   });
   await syncAndWait();
   row = await db.items.get(id);
