@@ -1,9 +1,11 @@
 // Publishing: turn a baked poem, an audio file or a video into something the public can play.
-// Drafts are made offline. Publishing, unpublishing and deleting need internet.
+// Drafts are made offline. Publishing runs in the background (publisher.js) and carries on when you
+// leave the page. Unpublishing and deleting need internet.
 import { sb } from '../../shared/supabase.js';
 import { db, now } from './db.js';
-import { syncSoon, syncAndWait, getSyncState } from './sync.js';
-import { publishItem, unpublishItem, deleteItemFiles, fetchMedia } from './api.js';
+import { syncSoon, syncAndWait } from './sync.js';
+import { unpublishItem, deleteItemFiles, fetchMedia } from './api.js';
+import { requestPublish, jobFor, isBusy, onPublishJobs } from './publisher.js';
 import { thumbFromImage, thumbFromTitle, thumbFromVideo } from './thumbs.js';
 import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, openModal, micIcon, uploadIcon } from './ui.js';
 
@@ -91,21 +93,10 @@ export async function createDraftFromFile(kind, file) {
   return id;
 }
 
-// Uploads what is pending, copies it to the public bucket and flips the item to Published.
-export async function publishItemNow(id) {
-  if (!navigator.onLine) throw new Error('This needs internet.');
-  await syncAndWait();
-  let row = await db.items.get(id);
-  if (!row) throw new Error('That item is gone.');
-  if (row.mediaPending || row.thumbPending || row.dirty) throw new Error(getSyncState().error || 'The upload did not finish. Try again with a better connection.');
-  const out = await publishItem(id, row.mediaKey, row.thumbKey);
-  await db.items.update(id, {
-    status: 'published', publishedAt: row.publishedAt || now(), publicMediaKey: out.publicMediaKey,
-    publicThumbKey: out.publicThumbKey, ...(await snapshot(row.poemId)), updatedAt: now(), dirty: 1,
-  });
-  await syncAndWait();
-  row = await db.items.get(id);
-  if (row.dirty) throw new Error('The files are ready but the page did not update. Tap Publish again.');
+// Publishing runs in the background (see publisher.js): this only puts the item in the queue.
+// The promise settles when the item is published or the job fails.
+export function publishItemNow(id, title = '') {
+  return requestPublish(id, title);
 }
 
 /* ---------- list (the Studio tab) ---------- */
@@ -115,6 +106,8 @@ export async function publishListView(nav) {
   const all = (await db.items.toArray()).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   const rows = all.filter((r) => (listFilter === 'published' ? r.status === 'published' : listFilter === 'drafts' ? r.status !== 'published' : true));
   const subs = new Map();
+  const stats = new Map(); // item id -> its status line
+  const ends = new Map();  // item id -> the badge that shows the percentage while publishing
   const filters = h('div', { class: 'filters' }, [['all', 'All'], ['drafts', 'Drafts'], ['published', 'Published']].map(([k, l]) =>
     h('button', { class: 'fchip' + (listFilter === k ? ' on' : ''), type: 'button', onclick: () => { listFilter = k; nav.refresh(); } }, l)));
   const list = rows.length
@@ -122,23 +115,28 @@ export async function publishListView(nav) {
         const sub = h('div', { class: 'sub' }, `${r.kind}, ${fmtDur(r.duration)}, edited ${fmtDate(r.updatedAt)}${r.dirty ? ', waiting to sync' : ''}`);
         subs.set(r.id, sub);
         const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' })) : h('div', { class: 'thumb ph' });
-        const end = r.status === 'published'
-          ? h('span', { class: 'badge', 'data-status': r.status }, STATUS[r.status])
-          : (() => {
-              const btn = h('button', {
-                class: 'btn small primary', type: 'button',
-                onclick: async (e) => {
-                  e.stopPropagation();
-                  btn.disabled = true;
-                  btn.textContent = 'Publishing…';
-                  try { await publishItemNow(r.id); toast('Published.'); } catch (x) { toast(x.message || String(x)); }
-                  nav.refresh();
-                },
-              }, 'Publish');
-              return btn;
-            })();
+        const job = isBusy(r.id) ? jobFor(r.id) : null;
+        const failed = jobFor(r.id)?.state === 'error';
+        const stat = h('div', { class: failed ? 'sub error' : 'sub' }, job ? job.label : failed ? 'Publishing failed. Open it to see why.' : (STATUS[r.status] || r.status));
+        stats.set(r.id, stat);
+        let end;
+        if (r.status === 'published') {
+          end = h('span', { class: 'badge', 'data-status': r.status }, STATUS[r.status]);
+        } else if (job) {
+          end = h('span', { class: 'badge', style: 'color:var(--accent);border-color:var(--accent)' }, job.pct + '%');
+          ends.set(r.id, end);
+        } else {
+          end = h('button', {
+            class: 'btn small primary', type: 'button',
+            onclick: (e) => {
+              e.stopPropagation();
+              requestPublish(r.id, r.title);
+              toast(navigator.onLine ? 'Publishing in the background. You can keep using the app.' : 'It will publish when you are back online.');
+            },
+          }, 'Publish');
+        }
         return h('li', { class: 'item', onclick: () => nav.open(r.id) }, thumb,
-          h('div', { class: 'grow' }, h('div', { class: 'title' }, r.title || 'Untitled'), h('div', { class: 'sub' }, STATUS[r.status] || r.status), sub), end);
+          h('div', { class: 'grow' }, h('div', { class: 'title' }, r.title || 'Untitled'), stat, sub), end);
       }))
     : h('p', { class: 'empty' }, listFilter === 'all'
         ? 'Nothing here yet. Tap Bake to record a poem over its tune, or use the upload button to add an audio or video file.'
@@ -176,6 +174,19 @@ export async function publishListView(nav) {
       }
     }).catch(() => {});
   }
+  // Live percentage on each row while it publishes. When a job starts or ends, the list is redrawn.
+  el._dispose = onPublishJobs((job) => {
+    if (!el.isConnected) return;
+    if (job.state === 'done' || job.state === 'error') return nav.refresh();
+    const end = ends.get(job.id);
+    if (!end) {
+      if (rows.some((r) => r.id === job.id && r.status !== 'published')) nav.refresh(); // started somewhere else
+      return;
+    }
+    end.textContent = job.pct + '%';
+    const stat = stats.get(job.id);
+    if (stat) stat.textContent = job.label;
+  });
   return el;
 }
 
@@ -303,11 +314,11 @@ async function existingUI(root, item, f, nav) {
   };
   const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
 
+  // Publishing is queued and runs in the background, so this returns at once.
   const publish = h('button', { class: 'btn primary', onclick: guarded(async () => {
-    needNet();
     await saveMeta();
-    await publishItemNow(id);
-    toast('Published.');
+    requestPublish(id, f.title.value.trim());
+    toast(navigator.onLine ? 'Publishing in the background. You can leave this page.' : 'Saved. It will publish when you are back online.');
   }) }, item.status === 'published' ? 'Update and republish' : 'Publish');
 
   const unpublish = h('button', { class: 'btn', onclick: guarded(async () => {
@@ -343,15 +354,37 @@ async function existingUI(root, item, f, nav) {
   }) }, 'Refresh poem text');
   busyButtons.push(publish, unpublish, del, saveBtn, refreshText);
 
-  const actions = h('div', { class: 'panel' }, h('h3', {}, 'Actions'),
-    h('div', { class: 'seg' }, ...(item.status === 'published' ? [publish, unpublish, refreshText] : [publish]), saveBtn),
-    item.mediaPending || item.thumbPending ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
-    del);
+  // Progress of a publish that is running (it carries on if you leave this page).
+  const job = jobFor(id);
+  const busy = isBusy(id);
+  const pLabel = h('span', { class: 'grow' }, job?.label || '');
+  const pPct = h('strong', {}, (job?.pct || 0) + '%');
+  const pBar = h('progress', { max: 100, value: job?.pct || 0 });
+  const progress = busy
+    ? h('div', { class: 'panel' }, h('h3', {}, 'Publishing'), h('div', { class: 'row' }, pLabel, pPct), pBar,
+        h('p', { class: 'muted small' }, 'This keeps going in the background. You can leave this page.'))
+    : null;
+  const failed = job && job.state === 'error' ? h('p', { class: 'error' }, 'Publishing failed: ' + job.error) : null;
 
+  const actions = h('div', { class: 'panel' }, h('h3', {}, 'Actions'),
+    h('div', { class: 'seg' }, ...(busy ? [] : item.status === 'published' ? [publish, unpublish, refreshText] : [publish]), saveBtn),
+    !busy && (item.mediaPending || item.thumbPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
+    busy ? null : del);
+
+  // The picture sits on its own line, so a long title can never push the page wider than the screen.
   root.append(
-    h('div', { class: 'row top' }, thumb, h('div', { class: 'grow' }, h('h2', {}, item.title || 'Untitled'), status,
+    thumb,
+    h('div', { class: 'row top' }, h('div', { class: 'grow' }, h('h2', { style: 'overflow-wrap:anywhere' }, item.title || 'Untitled'), status,
       h('div', { class: 'sub' }, `${item.kind}, ${fmtDur(item.duration)}`)), play),
-    f.details, actions);
+    progress, failed, f.details, actions);
+
+  root._dispose = onPublishJobs((j) => {
+    if (j.id !== id || !root.isConnected) return;
+    if (j.state === 'done' || j.state === 'error' || !busy) return nav.refresh();
+    pLabel.textContent = j.label;
+    pPct.textContent = j.pct + '%';
+    pBar.value = j.pct;
+  });
 
   if (item.status === 'published') {
     const link = `${location.origin}/p/${id}`;
