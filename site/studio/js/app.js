@@ -380,10 +380,12 @@ async function editorView(id) {
   window.addEventListener('resize', grow);
   setTimeout(grow, 60);
 
-  /* tune and voice recordings of this poem, shown under the title. Baked audio is not shown here: it is under Manage files. */
+  /* tune and voice recordings of this poem, shown under the title.
+     Baked audio and the voice recorded while baking are not shown here: they are under Manage files. */
   const fillFiles = async () => {
     const tune = tuneId ? await db.tunes.get(tuneId) : null;
-    const caps = (await db.captures.where('poemId').equals(id).toArray()).filter((c) => !c.deletedAt && c.status === 'done').sort(newest);
+    const bakedVoices = new Set((await db.bakes.where('poemId').equals(id).toArray()).map((b) => b.captureId).filter(Boolean));
+    const caps = (await db.captures.where('poemId').equals(id).toArray()).filter((c) => !c.deletedAt && c.status === 'done' && !bakedVoices.has(c.id)).sort(newest);
     const chips = [];
     if (tune && !tune.deletedAt) chips.push(fileChip({ label: tune.title || 'Tune', sub: fmtDur(tune.duration), getBlob: () => getBlob('tunes', tune), onDelete: removeTune }));
     for (const c of caps) chips.push(fileChip({ label: 'Voice', sub: fmtDur(c.duration), getBlob: () => getBlob('captures', c), onDelete: () => removeFile('captures', c.id, 'this recording') }));
