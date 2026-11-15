@@ -1,17 +1,148 @@
-// One poem: player, text, Love and Like, comments.
-import { h, fmtDur, fmtDate, fmtWhen, toast } from '../shared/dom.js';
+// One poem: sliding title, player, time and views, description, Love and Like, comments.
+import { h, fmtDur, fmtAgo, fmtWhen, toast } from '../shared/dom.js';
 import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady } from './auth-ui.js';
 import * as data from './data.js';
 
-const svg = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${inner}</svg>`;
+const svg = (inner, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="${cls}">${inner}</svg>`;
 const ICON = {
   love: svg('<path d="M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572"/>'),
   like: svg('<path d="M7 11v8a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-7a1 1 0 0 1 1 -1h3a4 4 0 0 0 4 -4v-1a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 2 0 0 1 -2 2h-7a3 3 0 0 1 -3 -3"/>'),
   comment: svg('<path d="M3 20l1.3 -3.9a9 8 0 1 1 3.4 2.9l-4.7 1"/>'),
   share: svg('<path d="M6 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 6m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 18m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M8.7 10.7l6.6 -3.4"/><path d="M8.7 13.3l6.6 3.4"/>'),
+  play: svg('<path d="M8 5v14l11 -7z"/>', 'solid'),
+  pause: svg('<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>', 'solid'),
 };
 const icon = (name) => { const s = h('span', { class: 'ico' }); s.innerHTML = ICON[name]; return s; };
 const getId = () => new URLSearchParams(location.search).get('id') || (location.pathname.match(/^\/p\/([0-9a-f-]{36})/) || [])[1] || '';
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const reducedMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+const debounce = (fn, ms) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
+
+/* ---------- the title: one line, slides slowly when it is too long ---------- */
+function slideTitle(box, text) {
+  let anim = null;
+  const run = () => {
+    if (anim) { anim.cancel(); anim = null; }
+    if (reducedMotion() || !text.animate) return;
+    const shift = text.offsetWidth - box.clientWidth;
+    if (shift > 4) {
+      anim = text.animate(
+        [{ transform: 'translateX(0)' }, { transform: `translateX(-${shift}px)` }],
+        { duration: shift * 45, direction: 'alternate', iterations: Infinity, easing: 'linear', delay: 1500, endDelay: 1500 },
+      );
+    }
+  };
+  run();
+  window.addEventListener('resize', debounce(run, 200));
+}
+
+/* ---------- the description: one line with "more...", opens to the whole text ---------- */
+function descBlock(body) {
+  const t = h('span', { class: 't' }, body);
+  const m = h('span', { class: 'm', role: 'button', tabindex: '0' }, 'more...');
+  const d = h('p', { class: 'desc' }, t, m);
+  const flip = () => { const open = d.classList.toggle('open'); m.textContent = open ? 'less' : 'more...'; };
+  m.addEventListener('click', flip);
+  m.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
+  // Only offer "more..." when the text really is longer than one line.
+  const fit = () => {
+    if (d.classList.contains('open')) return;
+    m.hidden = true;
+    m.hidden = !(t.scrollWidth > t.clientWidth || /\n/.test(body));
+  };
+  return { el: d, fit };
+}
+
+/* ---------- audio: thumbnail with the play button inside and wave bars while it plays ---------- */
+function audioStage({ src, thumb, duration }) {
+  const BARS = 24;
+  // crossorigin lets the page read the sound for the wave bars. If the file cannot be fetched that way, play it plainly.
+  const audio = h('audio', { crossorigin: 'anonymous', preload: 'metadata', src });
+  audio.hidden = true;
+  let analyse = true;
+  audio.addEventListener('error', () => {
+    if (analyse && audio.getAttribute('crossorigin')) {
+      analyse = false;
+      audio.removeAttribute('crossorigin');
+      audio.src = src;
+    }
+  });
+
+  const bars = Array.from({ length: BARS }, () => h('b'));
+  const barsEl = h('div', { class: 'bars', 'aria-hidden': 'true' }, bars);
+  const btn = h('button', { class: 'pbtn', type: 'button', 'aria-label': 'Play' });
+  const setIcon = (playing) => { btn.innerHTML = playing ? ICON.pause : ICON.play; btn.setAttribute('aria-label', playing ? 'Pause' : 'Play'); };
+  setIcon(false);
+
+  const seek = h('input', { type: 'range', min: '0', max: String(Math.max(1, Math.round(duration || 0))), step: '0.1', value: '0', 'aria-label': 'Seek' });
+  const time = h('span', {}, `0:00 / ${fmtDur(duration)}`);
+  const dur = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration || 0);
+  const paintTime = () => {
+    seek.max = String(dur());
+    seek.value = String(audio.currentTime);
+    time.textContent = `${fmtDur(audio.currentTime)} / ${fmtDur(dur())}`;
+  };
+  ['timeupdate', 'loadedmetadata', 'durationchange'].forEach((ev) => audio.addEventListener(ev, paintTime));
+  seek.addEventListener('input', () => { audio.currentTime = Number(seek.value); paintTime(); });
+
+  /* wave bars: real sound when the browser allows it, a smooth moving pattern when not */
+  let ctx = null;
+  let analyser = null;
+  let freq = null;
+  let fake = false;
+  const setupAnalyser = () => {
+    if (ctx || fake) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !analyse || !audio.getAttribute('crossorigin')) { fake = true; return; }
+    try {
+      ctx = new AC();
+      const node = ctx.createMediaElementSource(audio);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.8;
+      node.connect(analyser);
+      analyser.connect(ctx.destination);
+      freq = new Uint8Array(analyser.frequencyBinCount);
+    } catch { fake = true; ctx = null; analyser = null; }
+  };
+  const rest = () => bars.forEach((b) => { b.style.transform = 'scaleY(.08)'; });
+  rest();
+  let raf = 0;
+  const frame = (now) => {
+    raf = 0;
+    if (audio.paused) return;
+    if (analyser) {
+      analyser.getByteFrequencyData(freq);
+      for (let i = 0; i < BARS; i++) {
+        const v = Math.pow(freq[1 + Math.floor((i * 40) / BARS)] / 255, 1.15);
+        bars[i].style.transform = `scaleY(${Math.max(0.08, v).toFixed(3)})`;
+      }
+    } else {
+      for (let i = 0; i < BARS; i++) {
+        const v = 0.3 + 0.7 * Math.abs(Math.sin(now / 260 + i * 0.7) * Math.cos(now / 510 + i * 0.35));
+        bars[i].style.transform = `scaleY(${v.toFixed(3)})`;
+      }
+    }
+    raf = requestAnimationFrame(frame);
+  };
+  audio.addEventListener('play', () => { setIcon(true); if (!raf) raf = requestAnimationFrame(frame); });
+  const stopped = () => { setIcon(false); rest(); };
+  audio.addEventListener('pause', stopped);
+  audio.addEventListener('ended', stopped);
+
+  btn.addEventListener('click', () => {
+    if (!audio.paused) { audio.pause(); return; }
+    setupAnalyser();
+    if (ctx && ctx.state === 'suspended') ctx.resume();
+    const p = audio.play();
+    if (p && p.catch) p.catch(() => toast('Could not play this audio.'));
+  });
+
+  const el = h('div', { class: 'stage' },
+    thumb ? h('img', { src: thumb, alt: '' }) : null,
+    barsEl, btn, h('div', { class: 'tl' }, seek, time), audio);
+  return { el };
+}
 
 async function main() {
   mountAccountChip(document.getElementById('account'));
@@ -29,9 +160,9 @@ async function main() {
   /* media */
   const src = data.mediaUrl(item.public_media_key);
   const thumb = data.mediaUrl(item.public_thumb_key);
-  const player = item.kind === 'video'
+  const media = item.kind === 'video'
     ? h('video', { class: 'player', controls: true, playsinline: true, preload: 'metadata', poster: thumb, src })
-    : h('div', {}, thumb ? h('img', { class: 'cover', src: thumb, alt: '' }) : null, h('audio', { class: 'player', controls: true, preload: 'metadata', src }));
+    : audioStage({ src, thumb, duration: item.duration }).el;
 
   /* Love, Like and the comment button */
   let mine = new Set();
@@ -44,7 +175,7 @@ async function main() {
   const loveBtn = reactBtn('love', 'Love', nLove);
   const likeBtn = reactBtn('like', 'Like', nLike);
   const comBtn = h('button', { class: 'react', 'data-type': 'comment', 'aria-label': 'Comments', 'aria-expanded': 'false', onclick: () => toggleComments() }, icon('comment'), nCom);
-  const views = h('span', { class: 'muted small' });
+  const views = h('span', {});
 
   const paintPressed = () => {
     loveBtn.setAttribute('aria-pressed', String(mine.has('love')));
@@ -54,7 +185,7 @@ async function main() {
     nLove.textContent = String(row.n_love ?? 0);
     nLike.textContent = String(row.n_like ?? 0);
     nCom.textContent = String(row.n_comments ?? 0);
-    views.textContent = `${row.n_views ?? 0} views`;
+    views.textContent = plural(row.n_views ?? 0, 'view');
     paintPressed();
   };
   async function refresh() {
@@ -138,18 +269,25 @@ async function main() {
     try { await navigator.clipboard.writeText(url); toast('Link copied.'); } catch { toast(url); }
   } }, icon('share'));
 
-  const stanzas = (item.poem_stanzas || []).filter(Boolean);
-  root.replaceChildren(
-    player,
-    h('h1', {}, item.title),
-    h('p', { class: 'meta' }, `${fmtDate(item.published_at)}, ${fmtDur(item.duration)} `, views),
-    item.description ? h('p', { class: 'desc' }, item.description) : null,
-    stanzas.length ? h('div', { class: 'poem-text' }, h('h2', { class: 'sr' }, 'Poem text'), stanzas.map((s) => h('p', { class: 'stanza' }, s))) : null,
-    h('p', { class: 'sign' }, 'FabisPot'),
+  const titleText = h('h1', {}, item.title);
+  const titleBox = h('div', { class: 'ttl' }, titleText);
+  const description = (item.description || '').trim() ? descBlock(item.description.trim()) : null;
+
+  // Native replaceChildren() would print a missing item as the word "null", so only real items go in.
+  root.replaceChildren(...[
+    titleBox,
+    media,
+    h('p', { class: 'meta' }, fmtAgo(item.published_at), ' · ', views),
+    description ? description.el : null,
     h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, loveBtn, likeBtn, comBtn, shareBtn),
-    h('section', { class: 'comments-box' }, h('h2', { class: 'sr' }, 'Comments'), preview, panel));
+    h('section', { class: 'comments-box' }, h('h2', { class: 'sr' }, 'Comments'), preview, panel),
+  ].filter(Boolean));
   paintCounts(item);
   paintComments();
+  requestAnimationFrame(() => {
+    slideTitle(titleBox, titleText);
+    if (description) { description.fit(); window.addEventListener('resize', debounce(description.fit, 200)); }
+  });
   loadComments();
   loadMine();
   onAuth(() => { loadMine(); loadComments(); });

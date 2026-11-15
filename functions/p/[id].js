@@ -16,7 +16,7 @@ export async function onRequestGet({ request, params, env }) {
   if (UUID.test(id)) {
     try {
       const r = await fetch(
-        `${CONFIG.SUPABASE_URL}/rest/v1/items_public?id=eq.${id}&select=title,description,poem_stanzas,public_thumb_key&limit=1`,
+        `${CONFIG.SUPABASE_URL}/rest/v1/items_public?id=eq.${id}&select=title,description,public_thumb_key&limit=1`,
         { headers: { apikey: CONFIG.SUPABASE_ANON_KEY, Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}` } },
       );
       if (r.ok) item = (await r.json())[0] || null;
@@ -24,8 +24,7 @@ export async function onRequestGet({ request, params, env }) {
   }
 
   const title = item ? `${item.title} | Fabris Poet` : 'Fabris Poet';
-  const firstStanza = Array.isArray(item?.poem_stanzas) ? String(item.poem_stanzas[0] || '').replace(/\s+/g, ' ').slice(0, 160) : '';
-  const description = item ? (item.description || firstStanza || 'A poem, read aloud.') : 'Poems, read aloud.';
+  const description = item ? (String(item.description || '').replace(/\s+/g, ' ').trim().slice(0, 160) || 'A poem, read aloud.') : 'Poems, read aloud.';
   const image = item?.public_thumb_key ? `${CONFIG.API_BASE}/public/${item.public_thumb_key}` : '';
   const page = `${url.origin}/p/${id}`;
   const tags = [

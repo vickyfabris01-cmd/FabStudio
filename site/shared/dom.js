@@ -20,6 +20,21 @@ export const fmtDur = (s) => {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 };
 export const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+// "just now", "5 mins ago", "2 hrs ago", "3 days ago", then the date once it is a month old.
+export function fmtAgo(iso) {
+  const t = Date.parse(iso);
+  if (!t) return '';
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min${m === 1 ? '' : 's'} ago`;
+  const hr = Math.round(m / 60);
+  if (hr < 24) return `${hr} hr${hr === 1 ? '' : 's'} ago`;
+  const d = Math.round(hr / 24);
+  if (d < 30) return `${d} day${d === 1 ? '' : 's'} ago`;
+  return fmtDate(iso);
+}
+
 export const fmtWhen = (iso) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 let timer;

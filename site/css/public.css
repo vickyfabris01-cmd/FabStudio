@@ -40,7 +40,25 @@ p { margin: .5rem 0; }
 
 .player { width: 100%; display: block; margin-top: .8rem; border-radius: 12px; }
 video.player { background: #000; aspect-ratio: 16 / 9; }
-.desc { color: var(--muted); }
+.ttl { overflow: hidden; white-space: nowrap; margin: 1rem 0 .6rem; }
+.ttl h1 { display: inline-block; margin: 0; font-size: 1.6rem; white-space: nowrap; }
+.stage { position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: var(--line); }
+.stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0)); pointer-events: none; z-index: 1; }
+.pbtn { position: absolute; left: 50%; top: 42%; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; background: rgba(255,255,255,.92); color: #111; border: 0; padding: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 3; }
+.pbtn svg { width: 28px; height: 28px; fill: currentColor; stroke: none; }
+.bars { position: absolute; left: 14px; right: 14px; bottom: 46px; height: 48px; display: flex; align-items: flex-end; justify-content: center; gap: 4px; z-index: 2; }
+.bars b { flex: 1; max-width: 6px; height: 100%; border-radius: 3px; background: rgba(255,255,255,.9); transform-origin: bottom; transform: scaleY(.08); transition: transform .12s linear; }
+.tl { position: absolute; left: 12px; right: 12px; bottom: 8px; z-index: 3; color: #fff; font-size: .8rem; line-height: 1.2; }
+.tl input[type='range'] { display: block; width: 100%; min-height: 0; height: 18px; margin: 0 0 2px; padding: 0; border: 0; background: transparent; accent-color: #fff; }
+.desc { display: flex; gap: .4rem; color: var(--muted); margin: .4rem 0 0; }
+.desc .t { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.desc .m { flex: none; color: var(--accent); cursor: pointer; }
+.desc .m[hidden] { display: none; }
+.desc.open { display: block; }
+.desc.open .t { display: inline; white-space: pre-line; overflow: visible; }
+.desc.open .m { margin-left: .4rem; }
+@media (prefers-reduced-motion: reduce) { .ttl { overflow-x: auto; } .bars b { transition: none; } }
 .poem-text { margin: 1.6rem 0; padding: 1.2rem 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .stanza { font-family: var(--serif); font-size: 1.25rem; line-height: 1.8; white-space: pre-line; margin: 0 0 1.4rem; }
 .stanza:last-child { margin-bottom: 0; }

@@ -42,8 +42,7 @@ const poemLabel = (p) => p.title || (p.stanzas?.[0] || '').split('\n')[0] || 'Un
 const withUrl = (blob, img) => { const u = URL.createObjectURL(blob); img.onload = () => URL.revokeObjectURL(u); img.src = u; return img; };
 
 async function snapshot(poemId) {
-  const p = poemId ? await db.poems.get(poemId) : null;
-  return p && !p.deletedAt ? { poemTitle: p.title || '', poemStanzas: p.stanzas || [] } : { poemTitle: '', poemStanzas: [] };
+  return { poemTitle: '', poemStanzas: [] }; // poem text stays in Studio and is never published
 }
 
 /* ---------- drafts made by the app ---------- */
@@ -200,7 +199,7 @@ export async function itemView(id, nav, prefill = {}) {
   const title = h('input', { placeholder: 'Title', value: existing?.title || '', 'aria-label': 'Title' });
   const desc = h('textarea', { placeholder: 'Short description (optional)', rows: 3, 'aria-label': 'Description' });
   desc.value = existing?.description || '';
-  const poemSel = h('select', { 'aria-label': 'Linked poem' }, h('option', { value: '' }, 'No poem text'), poems.map((p) => h('option', { value: p.id }, poemLabel(p))));
+  const poemSel = h('select', { 'aria-label': 'Linked poem' }, h('option', { value: '' }, 'No linked poem'), poems.map((p) => h('option', { value: p.id }, poemLabel(p))));
   poemSel.value = existing?.poemId || '';
   const comments = h('input', { type: 'checkbox', checked: existing ? existing.commentsEnabled : true });
   const reactions = h('input', { type: 'checkbox', checked: existing ? existing.reactionsEnabled : true });

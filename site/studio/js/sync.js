@@ -12,7 +12,7 @@ const T = {
   tunes:    { remote: 'tunes',           fields: ['id','title','mime','duration','r2Key','rightsNote','createdAt','updatedAt','deletedAt'] },
   captures: { remote: 'idea_captures',   fields: ['id','poemId','mime','duration','r2Key','createdAt','updatedAt','deletedAt'] },
   bakes:    { remote: 'bakes',           fields: ['id','poemId','captureId','tuneId','tuneVolume','mime','duration','r2Key','createdAt','updatedAt','deletedAt'] },
-  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','poemTitle','poemStanzas','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'] },
+  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'] },
 };
 // Files that belong to each row: which field holds the file, its R2 key, and its "still to upload" flag.
 const FILE = { blob: 'blob', key: 'r2Key', pending: 'blobPending' };

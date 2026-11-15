@@ -84,8 +84,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) acqu
 
 /* ---------- the job ---------- */
 async function snapshot(poemId) {
-  const p = poemId ? await db.poems.get(poemId) : null;
-  return p && !p.deletedAt ? { poemTitle: p.title || '', poemStanzas: p.stanzas || [] } : { poemTitle: '', poemStanzas: [] };
+  return { poemTitle: '', poemStanzas: [] }; // poem text stays in Studio and is never published
 }
 
 async function whenOnline(job) {
