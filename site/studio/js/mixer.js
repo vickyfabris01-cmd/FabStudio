@@ -4,7 +4,7 @@
 import { pickMime } from './recorder.js';
 
 const AC = window.AudioContext || window.webkitAudioContext;
-export const BAKE_TUNE_VOLUME = 0.9; // tune level while baking; the voice is always 1.0
+export const BAKE_TUNE_VOLUME = 1; // tune level while baking; the voice is always 1.0
 
 /* ---------- live ---------- */
 export class LiveMix {
