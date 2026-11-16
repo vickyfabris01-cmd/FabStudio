@@ -21,6 +21,7 @@ OWNER_USER_ID = "fd462ef4-8cb3-4ec3-9ba5-ab0ef64d4e14"
 ALLOWED_ORIGINS = "https://fabstudio.pages.dev,http://localhost:8788,http://127.0.0.1:5500"
 # Largest single file accepted, in MB.
 MAX_UPLOAD_MB = "500"
+SFU_APP_ID = "7f9c810f93f9fac265edad01aebd4477"
 
 # Phase 3 (Live): ADD these to worker/wrangler.toml, then run `npx wrangler deploy` (docs/LIVE.md, section 3).
 # Your existing lines stay exactly as they are.
@@ -35,7 +36,7 @@ tag = "v1-live-room"
 new_sqlite_classes = ["LiveRoom"]
 
 # Add this line inside your existing [vars] block (it is not a secret):
-SFU_APP_ID = "7f9c810f93f9fac265edad01aebd4477"
+#  SFU_APP_ID = "7f9c810f93f9fac265edad01aebd4477"
 #
 # Then set the two secrets (never put them in this file):
 #   npx wrangler secret put SFU_APP_SECRET           <- the Realtime App Secret
