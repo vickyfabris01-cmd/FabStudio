@@ -68,6 +68,29 @@ async function main() {
   const counts = { like: row.n_like || 0 };
 
   const feed = h('div', { class: 'l-feed', role: 'log', 'aria-live': 'polite' });
+
+  // after the live: the counts, and two published poems to listen to while the recap is being prepared
+  const stats = h('div', { class: 'l-stats', hidden: true });
+  const waitBox = h('div', { class: 'l-wait', hidden: true });
+  const wait = { items: null, loading: false, audio: null, playing: null, key: '' };
+  async function loadWait() {
+    if (wait.items || wait.loading) return;
+    wait.loading = true;
+    try {
+      const all = (await data.listItems()).filter((x) => x.id !== id && x.public_media_key);
+      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
+      wait.items = all.slice(0, 2);
+    } catch { wait.items = []; }
+    wait.loading = false; paint();
+  }
+  function playWait(it) {
+    if (wait.playing === it.id) { wait.audio?.pause(); wait.playing = null; return paint(); }
+    wait.audio?.pause();
+    const a = new Audio(data.mediaUrl(it.public_media_key));
+    a.ontimeupdate = () => { const bar = waitBox.querySelector(`[data-bar="${it.id}"]`); if (bar && a.duration) bar.style.width = `${Math.min(100, (a.currentTime / a.duration) * 100)}%`; };
+    a.onended = () => { wait.playing = null; paint(); };
+    a.play().then(() => { wait.audio = a; wait.playing = it.id; paint(); }).catch(() => toast('Could not play this one.'));
+  }
   const gate = h('div', { class: 'l-panel l-gate', hidden: true });
 
   // the message box, docked at the bottom and lifted above the keyboard
@@ -78,7 +101,7 @@ async function main() {
   const bubbles = h('div', { class: 'l-bubbles', 'aria-hidden': 'true' });
   const dock = h('div', { class: 'l-dock', hidden: true }, bubbles, h('div', { class: 'l-dockin' }, loveBtn, h('div', { class: 'l-box' }, modeChip, chatIn), sendBtn));
 
-  root.replaceChildren(stage, audio, title, before, pills, gate, note, feed);
+  root.replaceChildren(stage, audio, title, before, pills, gate, note, feed, waitBox, stats);
   document.body.append(dock);
 
   const els = { q: h('div', { class: 'l-q-ind' }) };
@@ -126,7 +149,7 @@ async function main() {
     try {
       S.pull = await pullAudio({ item: id, getToken: token, onStream: (st) => {
         audio.srcObject = st;
-        audio.play().then(() => { S.blocked = false; paint(); }).catch(() => { S.blocked = true; paint(); });  // the browser may need one tap
+        Promise.resolve(audio.play()).then(() => { S.blocked = false; paint(); }).catch(() => { S.blocked = true; paint(); });  // the browser may need one tap
       } });
       S.stopQ = watchQuality(S.pull.pc, (q) => { S.q = q; paintQ(); });
       S.pull.pc.addEventListener('connectionstatechange', () => { if (['failed', 'disconnected'].includes(S.pull?.pc.connectionState)) setTimeout(() => { if (S.listening && S.pull?.pc.connectionState !== 'connected') relisten(); }, 3000); });
@@ -144,7 +167,7 @@ async function main() {
     if (S.listening && a.online && a.epoch !== S.epoch && S.epoch !== -1) relisten();
     S.epoch = a.epoch;
   }
-  addEventListener('pagehide', () => stopListen());
+  addEventListener('pagehide', () => { stopListen(); wait.audio?.pause(); });
   function paintQ() { const q = els.q; q.textContent = S.q ? { good: 'Audio: good', fair: 'Audio: some stutter', poor: 'Audio: poor connection', stalled: 'Audio: no data' }[S.q.quality] : ''; q.className = 'l-q-ind ' + (S.q?.quality || ''); }
 
   /* ----- Like is a toggle kept in the database; Love is a burst of taps carried by the room ----- */
@@ -246,8 +269,10 @@ async function main() {
     stage.classList.toggle('is-live', live);
     if (blocked) over.replaceChildren();
     else if (ended) {
-      over.replaceChildren(h('p', {}, S.row.public_media_key ? 'This live has ended. The replay is ready.' : 'This live has ended.'),
-        S.row.public_media_key ? h('a', { class: 'l-btn', href: `/poem/?id=${id}` }, 'Watch the replay') : h('a', { class: 'l-btn ghost', href: '/' }, 'More poems'));
+      const ready = !!S.row.public_media_key;
+      over.replaceChildren(...(ready
+        ? [h('p', { class: 'l-big' }, 'This live has ended. The replay is ready.'), h('a', { class: 'l-btn', href: `/poem/?id=${id}` }, 'Watch the replay')]
+        : [h('p', { class: 'l-big' }, 'Live recap will be available soon'), h('p', { class: 'l-meta' }, `Thanks for listening to ${S.room?.title || S.row.title}`)]));
     } else if (!live) {
       const c = countdownText();
       over.replaceChildren(...[
@@ -275,7 +300,7 @@ async function main() {
     if (live && audioOn && !blocked && !S.listening && !S.stopped && Date.now() - S.failedAt > 5000) listen(true);
 
     // pills
-    const showPills = (live || ended) && !blocked;
+    const showPills = live && !blocked;
     pills.hidden = !showPills;
     const showCounts = settings.showReactionCounts !== false;
     viewsPill.hidden = settings.showViewCount === false || S.row.n_views == null;
@@ -307,7 +332,7 @@ async function main() {
     // one feed: chat, requests and love, in time order
     const reqs = (S.room?.requests || []).filter((r) => r.status !== 'dismissed').map((r) => ({ kind: 'request', id: r.id, name: r.name, text: r.text, at: r.at || 0, mine: r.mine, seq: 0 }));
     const lines = [...S.chat.map((c) => ({ ...c, seq: 0 })), ...reqs, ...S.loves].sort((x, y) => (x.at - y.at) || (x.seq - y.seq));
-    const showFeed = !blocked && (live || (ended && lines.length));
+    const showFeed = !blocked && live;
     feed.hidden = !showFeed;
     const fk = lines.map((l) => `${l.kind}${l.id || l.uid8}:${l.total || ''}:${l.at}`).join(',');
     if (fk !== feedKey) {
@@ -319,6 +344,28 @@ async function main() {
       if (end) feed.scrollTop = feed.scrollHeight;
       feedKey = fk;
     }
+
+    // after the live: counts, and (until the replay is published) two poems to listen to meanwhile
+    const ready = ended && !!S.row.public_media_key;
+    stats.hidden = !ended || blocked;
+    if (ended) {
+      stats.replaceChildren(h('span', { class: 'l-pill' }, svg(EYE), h('b', {}, String(S.row.n_views ?? 0))),
+        h('span', { class: 'l-pill love' }, svg(LOVE), h('b', {}, String(S.row.n_love ?? 0))),
+        h('span', { class: 'l-pill' }, svg(LIKE), h('b', {}, String(Math.max(0, counts.like)))),
+        h('span', { class: 'grow' }), h('a', { class: 'l-link', href: '/' }, 'More poems'));
+    }
+    waitBox.hidden = !ended || ready || blocked;
+    if (ended && !ready) {
+      loadWait();
+      const wk = (wait.items || []).map((x) => x.id).join() + '|' + wait.playing;
+      if (wk !== wait.key) {
+        wait.key = wk;
+        waitBox.replaceChildren(...((wait.items || []).length ? [h('h2', {}, 'While you wait'), ...wait.items.map((it) => h('div', { class: 'l-witem' },
+          h('button', { class: 'l-round', type: 'button', 'aria-label': wait.playing === it.id ? 'Pause' : 'Play', onclick: () => playWait(it) }, wait.playing === it.id ? '❚❚' : '▶'),
+          h('div', { class: 'grow' }, h('div', { class: 'l-wtitle' }, it.title || 'Untitled'), h('div', { class: 'l-wbar' }, h('i', { 'data-bar': it.id }))),
+          h('span', { class: 'l-meta' }, it.duration ? `${Math.floor(it.duration / 60)}:${String(Math.round(it.duration % 60)).padStart(2, '0')}` : '')))] : []));
+      }
+    } else if (wait.audio) { wait.audio.pause(); wait.audio = null; wait.playing = null; wait.key = ''; }
 
     // the message box (never before the live starts, never after it ends)
     const chatOn = settings.chatEnabled !== false;

@@ -291,3 +291,24 @@ body.baking #toast { bottom: 11rem; }
 .rlabel { color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 .4rem; font-size: .7rem; margin-left: .4rem; white-space: nowrap; }
 .modal.wide { max-width: 560px; }
 @media (max-width: 899px) { .c-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .c-read, .c-chat { min-height: 360px; } }
+
+/* ---------- Live recap, Part 3 ---------- */
+.c-after[hidden] { display: none; }
+.c-recap { margin-top: 0; }
+.rc-head { align-items: flex-start; gap: .8rem; }
+.rc-head h3 { margin: 0 0 .2rem; }
+.rc-wave { display: block; width: 100%; height: 96px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; touch-action: none; }
+.rc-ctl { margin-top: .4rem; gap: .6rem; }
+.rc-time { font-variant-numeric: tabular-nums; }
+.c-recap h4 { margin: 1rem 0 .4rem; font-size: .95rem; }
+.rc-marks { display: flex; flex-direction: column; gap: .15rem; margin-bottom: .5rem; }
+.rc-mark { display: flex; align-items: center; gap: .5rem; padding: .15rem 0; border-top: 1px solid var(--line); }
+.rc-t { font-variant-numeric: tabular-nums; min-width: 3.6rem; text-align: left; }
+.rc-mname { width: 100%; }
+.rc-kind { font: inherit; font-size: .72rem; color: var(--muted); border: 1px solid var(--line); background: none; border-radius: 999px; padding: .1rem .55rem; cursor: pointer; white-space: nowrap; }
+.rc-kind.poem { color: var(--accent); border-color: var(--accent); }
+.rc-clip { border-top: 1px solid var(--line); margin-top: .6rem; }
+.rc-cliprow { flex-wrap: wrap; gap: .4rem .6rem; margin: .5rem 0; }
+.rc-clockin { width: 5.2rem; text-align: center; font-variant-numeric: tabular-nums; }
+.rc-clipitem { display: flex; align-items: center; gap: .7rem; padding: .35rem 0; border-top: 1px solid var(--line); }
+.c-recap .lnk { font: inherit; font-size: .85rem; color: var(--muted); background: none; border: 0; text-decoration: underline; cursor: pointer; padding: .2rem; }

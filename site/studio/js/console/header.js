@@ -15,6 +15,8 @@ export function consoleHeader({ engine, nav, itemId, openSettings }) {
   const timer = h('b', { class: 'c-clock' });
   const info = h('span', { class: 'small muted' });
   const retry = h('button', { class: 'btn small', type: 'button', hidden: true, onclick: () => engine.retryAudio() }, 'Retry audio');
+  const mark = h('button', { class: 'btn small', type: 'button', hidden: true, title: 'Mark this moment in the recording' }, '+ Timestamp');
+  mark.onclick = async () => { const at = engine.rec ? Math.round(engine.rec.seconds()) : 0; await engine.addMarker({ label: 'Timestamp', kind: 'dead moment' }); toast(`Timestamp added at ${fmtDur(at)}.`); };
   const end = h('button', { class: 'btn small danger', type: 'button', hidden: true }, 'End live');
   end.onclick = () => { if (confirm('End the live for everyone? This cannot be undone.')) engine.end(); };
   const link = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Copy viewer link', title: 'Copy viewer link', onclick: () => copyLink(itemId) }, linkIcon());
@@ -22,7 +24,7 @@ export function consoleHeader({ engine, nav, itemId, openSettings }) {
   const el = h('div', { class: 'card c-head' },
     h('div', { class: 'row c-headrow' },
       h('button', { class: 'btn small', type: 'button', onclick: () => nav.liveList() }, '‹ Lives'),
-      h('div', { class: 'grow' }, titleIn), status, timer, retry, end, link, gear),
+      h('div', { class: 'grow' }, titleIn), status, timer, retry, mark, end, link, gear),
     h('div', { class: 'row small' }, info));
 
   function paint() {
@@ -31,7 +33,7 @@ export function consoleHeader({ engine, nav, itemId, openSettings }) {
     status.textContent = live ? '● ON AIR' : st.phase === 'ended' ? 'Ended' : st.phase === 'starting' ? 'Starting…' : 'Not on air';
     status.className = 'badge' + (live ? ' onair' : '');
     timer.textContent = live && st.room?.startedAt ? clock((Date.now() - st.room.startedAt) / 1000) : '';
-    end.hidden = !live;
+    end.hidden = !live; mark.hidden = !live;
     retry.hidden = !(live && st.audioState === 'lost');
     const conn = { open: '', connecting: 'Connecting to the room…', reconnecting: 'Reconnecting to the room…', closed: '' }[st.conn] || '';
     const rec = live ? `Recording on this laptop · ${fmtDur(st.recSeconds)}${st.audioState === 'connecting' ? ' · reconnecting audio…' : ''}` : '';

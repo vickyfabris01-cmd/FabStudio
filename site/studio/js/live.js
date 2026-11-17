@@ -11,6 +11,7 @@ import { statCards } from './console/stats.js';
 import { readingPane } from './console/reading.js';
 import { chatPane } from './console/chatfeed.js';
 import { settingsList, openSettingsModal } from './console/settings-modal.js';
+import { recapPane } from './console/recap.js';
 import { uploadBlob, liveAssets } from './api.js';
 import { thumbFromTitle } from './thumbs.js';
 import { syncAndWait } from './sync.js';
@@ -159,34 +160,26 @@ export async function liveConsoleView(itemId, nav) {
   const onDevices = () => loadInputs();
   navigator.mediaDevices?.addEventListener?.('devicechange', onDevices);
 
-  /* ----- after the session ----- */
-  const afterBox = h('section', { class: 'card c-after', hidden: true });
-  let afterKey = '';
+  /* ----- after the session: the recap ----- */
+  const afterBox = h('div', { class: 'c-after', hidden: true });
+  let recap = null; let recapBusy = false;
   const paintAfter = async () => {
-    const st = s();
-    if (afterKey === 'busy') return;
     afterBox.hidden = false;
-    const cap = st.captureId ? await db.captures.get(st.captureId) : null;
-    const { data: item } = await sb.from('published_items').select('public_media_key').eq('id', itemId).single();
-    const published = !!item?.public_media_key;
-    const key = `${cap?.status}|${cap?.blobPending}|${cap?.dirty}|${published}`;
-    if (key === afterKey) return;
-    afterKey = key;
-    const ready = cap && cap.status === 'done' && !cap.blobPending;
-    const btn = h('button', { class: 'btn primary', type: 'button' }, published ? 'Replay is published' : 'Publish replay');
-    btn.disabled = published || !ready;
-    btn.onclick = async () => {
-      afterKey = 'busy'; btn.disabled = true; btn.textContent = 'Publishing…';
-      try { await publishReplay(itemId, cap, s().row.title); toast('Replay published.'); }
-      catch (e) { toast(e.message || String(e)); }
-      afterKey = ''; paintAfter();
-    };
-    afterBox.replaceChildren(h('h3', {}, 'After the live'),
-      h('p', { class: 'small' }, `Lasted ${st.room?.startedAt && st.room?.endedAt ? fmtDur((st.room.endedAt - st.room.startedAt) / 1000) : '—'} · peak ${st.peak} watching.`),
-      !cap ? h('p', { class: 'small muted' }, 'No recording was made on this device for this live.')
-        : h('p', { class: 'small muted' }, ready ? 'Recording saved and uploaded to your private storage.' : cap.status !== 'done' ? 'Finishing the recording…' : 'The recording is uploading to your private storage. Keep the app open and online.'),
-      h('p', { class: 'small muted' }, 'Publishing makes the recording the replay on the same page, with the same views, likes and comments. Not publishing keeps the page as "ended" with no audio.'),
-      btn);
+    if (recap) return recap.paint();
+    if (recapBusy) return;
+    recapBusy = true;
+    try {
+      const st = s();
+      const cap = st.captureId ? await db.captures.get(st.captureId) : null;
+      recap = await recapPane({
+        engine, itemId, cap, title: st.row.title,
+        published: async () => { const { data: item } = await sb.from('published_items').select('public_media_key').eq('id', itemId).single(); return !!item?.public_media_key; },
+        publishWhole: (c) => publishReplay(itemId, c, s().row.title),
+      });
+      afterBox.replaceChildren(recap.el);
+      recap.paint();
+    } catch (e) { afterBox.replaceChildren(h('p', { class: 'error' }, 'Could not open the recap: ' + (e.message || e))); }
+    recapBusy = false;
   };
 
   root.append(header.el, sched, stats.el, sound, h('div', { class: 'c-split' }, reading.el, afterBox, chat.el));
@@ -218,7 +211,7 @@ export async function liveConsoleView(itemId, nav) {
   const off = engine.on(paint);
   const offDeck = deck.on(paint);
   const tick = setInterval(paint, 1000);
-  root._dispose = () => { off(); offDeck(); clearInterval(tick); reading.dispose(); navigator.mediaDevices?.removeEventListener?.('devicechange', onDevices); };
+  root._dispose = () => { off(); offDeck(); clearInterval(tick); reading.dispose(); recap?.dispose(); navigator.mediaDevices?.removeEventListener?.('devicechange', onDevices); };
   await loadInputs();
   paint();
   return root;

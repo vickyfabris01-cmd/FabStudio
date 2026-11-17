@@ -99,3 +99,16 @@ body.has-dock .foot { display: none; }
 .l-heart svg { width: 22px; height: 22px; fill: currentColor; stroke: currentColor; }
 @keyframes lheart { 0% { transform: translate(0, 0) scale(.7); opacity: 0; } 15% { opacity: 1; } 100% { transform: translate(14px, -150px) scale(1.15); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .l-heart { display: none; } }
+
+/* ---------- Part 3: after the live ---------- */
+.l-big { font: 600 1.15rem var(--serif); margin: .2rem 0; }
+.l-stats { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; margin: 1rem 0 .4rem; }
+.l-stats[hidden], .l-wait[hidden] { display: none; }
+.l-stats .l-pill b { font-weight: 500; color: var(--text); }
+.l-wait { margin-top: 1.1rem; }
+.l-wait h2 { font-size: 1rem; margin: 0 0 .5rem; }
+.l-witem { display: flex; align-items: center; gap: .7rem; padding: .5rem 0; border-top: 1px solid var(--line); }
+.l-witem .l-round { width: 42px; height: 42px; font-size: .85rem; }
+.l-wtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.l-wbar { height: 3px; background: var(--line); border-radius: 2px; margin-top: .4rem; overflow: hidden; }
+.l-wbar i { display: block; height: 100%; width: 0; background: var(--accent); }

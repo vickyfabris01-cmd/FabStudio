@@ -172,6 +172,25 @@ class LiveEngine extends EventTarget {
   }
   sendShow() { const { title, poem, playing } = this.s.show; this.send({ t: 'show', title: !!title, poem, playing }); }
 
+  // How loud the recording is, twice a second. Saved on this laptop for the recap's waveform (every minute, and at the end).
+  collectPeak(level) {
+    this.peakMax = Math.max(this.peakMax || 0, level);
+    this.peakTick = (this.peakTick || 0) + 1;
+    if (this.peakTick % 5) return;
+    (this.peaks ||= []).push(Math.round(this.peakMax * 100));
+    this.peakMax = 0;
+    if (this.peaks.length % 120 === 0 && this.s.captureId) this.savePeaks(this.s.captureId);
+  }
+  async savePeaks(id) { try { await db.meta.put({ key: `peaks:${id}`, value: this.peaks || [] }); } catch { /* the recap then draws a rougher waveform */ } }
+
+  // The recap edits the whole list of markers at once.
+  async setMarkers(list) {
+    const s = this.s;
+    s.markers = [...list].sort((a, b) => a.t - b.t).slice(0, 300).map((m) => ({ t: Math.max(0, Math.round(m.t)), label: String(m.label || '').slice(0, 80), kind: m.kind === 'poem' ? 'poem' : 'dead moment' }));
+    this.emit();
+    await sb.from('live_sessions').update({ markers: s.markers }).eq('item_id', s.itemId);
+  }
+
   // A marker is a point in the recording (seconds from its start). Only while the recording runs.
   async addMarker({ label, kind = 'dead moment' }) {
     const s = this.s;
@@ -208,7 +227,11 @@ class LiveEngine extends EventTarget {
     await a.start({ deviceId });
     a.onLost = () => { if (this.s.phase === 'live') this.set({ error: 'The audio input was lost. Plug it back in, then press Retry audio.' , audioState: 'lost' }); };
     this.audio = a;
-    this.meter = setInterval(() => { this.s.level = a.level(); if (this.rec) this.s.recSeconds = this.rec.seconds(); this.emit(); }, 100);
+    this.meter = setInterval(() => {
+      this.s.level = a.level();
+      if (this.rec) { this.s.recSeconds = this.rec.seconds(); this.collectPeak(this.s.level); }
+      this.emit();
+    }, 100);
     if (this.s.phase === 'idle') this.s.phase = 'ready';
     this.emit();
     return a;
@@ -233,6 +256,7 @@ class LiveEngine extends EventTarget {
     try {
       const a = await this.prepare();
       this.rec = await startLiveRecording(a.stream);
+      this.peaks = []; this.peakMax = 0; this.peakTick = 0;
       s.captureId = this.rec.id;
       await this.publish(false);
       this.set({ phase: 'live', audioState: 'ok' });
@@ -314,7 +338,7 @@ class LiveEngine extends EventTarget {
     try { this.pub?.close(); } catch { /* closed */ }
     this.pub = null;
     let id = s.captureId;
-    if (this.rec) { try { id = await this.rec.stop(); } catch (e) { s.error = friendly(e); } this.rec = null; }
+    if (this.rec) { try { id = await this.rec.stop(); } catch (e) { s.error = friendly(e); } this.rec = null; if (id) await this.savePeaks(id); }
     await this.stopAudio();
     s.phase = 'ended'; s.captureId = id; s.audioState = '';
     if (id) {
