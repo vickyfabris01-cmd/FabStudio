@@ -9,6 +9,7 @@ import { publishListView, itemView } from './publish.js';
 import { bakerView, openBakeModal } from './baker.js';
 import { liveListView, liveConsoleView } from './live.js';
 import { engine } from './live-engine.js';
+import { folderSupported, getFolder, pickFolder, forgetFolder, folderAllowed } from './console/myaudio.js';
 
 const app = document.getElementById('app');
 const state = { tab: 'poems', poemId: null, itemId: null, prefill: {}, bake: null, liveId: null };
@@ -567,6 +568,17 @@ async function settingsView() {
         } }, 'Sign in'))
     : null;
 
+  // The laptop folder for live audio files. Files are read in place; only the browser's handle is kept.
+  const folder = await getFolder();
+  const folderOk = folder ? await folderAllowed(folder) : false;
+  const folderPanel = h('div', { class: 'panel' }, h('h3', {}, 'Audio files folder'),
+    !folderSupported() ? h('p', { class: 'muted small' }, 'Choosing a folder needs Chrome or Edge on a laptop.')
+      : [h('p', {}, folder ? `${folder.name}${folderOk ? '' : ' (needs Allow)'}` : 'No folder chosen yet.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', type: 'button', onclick: async () => { try { await pickFolder(); renderView(); } catch { /* cancelled */ } } }, folder ? 'Change folder' : 'Browse folder'),
+          folder ? h('button', { class: 'btn danger', type: 'button', onclick: async () => { await forgetFolder(); renderView(); } }, 'Forget') : null),
+        h('p', { class: 'muted small' }, 'Files are read in place and never copied or moved. After the browser restarts, tap Allow once in the live console (My audio tab).')]);
+
   const pct = est?.quota ? Math.min(100, Math.round((est.usage / est.quota) * 100)) : 0;
   return h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Settings')),
@@ -585,6 +597,7 @@ async function settingsView() {
       h('p', {}, 'Cloud (R2): not set up yet'),
       h('progress', { max: 100, value: 0 }),
       h('p', { class: 'muted small' }, 'Cloud usage will show here once it is configured.')),
+    folderPanel,
     h('div', { class: 'panel' }, h('h3', {}, 'Recording'),
       h('label', { class: 'row check' }, raw, h('span', {}, 'Raw audio (turn off voice processing). Use with your soundcard or music.')),
       h('p', { class: 'muted small' }, 'The microphone is chosen by your phone: an external one when it is connected, otherwise the built-in one.')),
