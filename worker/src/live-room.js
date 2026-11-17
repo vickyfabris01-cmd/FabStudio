@@ -5,8 +5,9 @@
 // (viewer mode, slow mode, mutes, limits) on the server, so a modified browser cannot get around them.
 //
 // Browsers connect with a WebSocket at /live/ws?item=<id> and first send {t:'hello', token}.
-// Chat is saved to the `comments` table in batches (so it shows under the replay), and the request log
-// is saved to live_sessions when the live ends. Both need the SUPABASE_SERVICE_KEY secret.
+// Chat is saved to the `comments` table in batches (so it shows under the replay), each person's Love taps are
+// saved to `live_love` on the same schedule, and the request log is saved to live_sessions when the live ends.
+// All of that needs the SUPABASE_SERVICE_KEY secret.
 import { DEFAULT_SETTINGS, cleanSettings, publicSettings } from '../../site/shared/live-settings.js';
 
 const KEEP_CHAT = 300;        // messages kept in the room
@@ -15,6 +16,12 @@ const HELLO_MS = 15000;       // a socket that never says hello is closed after 
 const COUNT_MS = 1500;        // viewer count is sent at most this often
 const REACT_MS = 1000;        // reaction pulses are batched into one message per second
 const MAX_REQUESTS = 200;
+const LOVE_BATCH = 12;        // taps accepted in one love message (the page batches about every 0.4 s)
+const LOVE_GAP_MS = 250;      // love messages from one person closer than this are dropped without an error
+const MAX_LOVERS = 5000;      // people whose love totals are kept in the room
+const MAX_JOINED = 5000;      // people remembered for "joined" notices
+const MAX_POEMS = 40;         // poem titles the host can offer in the Request list
+const POEM_CHARS = 60;
 
 const fresh = () => ({
   itemId: null,
@@ -28,7 +35,11 @@ const fresh = () => ({
   startedAt: null,
   endedAt: null,
   peak: 0,
-  requests: [],               // { id, uid, name, kind, text, status, at }
+  requests: [],               // { id, uid, name, kind, text, status, at }. kind is always 'request'.
+  love: {},                   // uid -> { name, taps, dirty }  Love taps this live, merged per person
+  joined: {},                 // uid -> 1  people already announced to the host this live
+  poems: [],                  // titles of poems with more than 5 stanzas, for the Request list
+  show: { on: false, poem: '', playing: '' },   // what viewers may see: poem title and what is playing
 });
 
 const clean = (v, max) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -44,12 +55,19 @@ export class LiveRoom {
     this.lastChat = new Map();     // uid -> last chat time (slow mode)
     this.tokens = new Map();       // token -> { user, until }
     this.pulses = { love: 0, like: 0 };
+    this.lastLove = new Map();     // uid -> last love message time
+    this.viewed = new Set();       // uids whose view was already sent to the database in this room
+    this.lovingNow = false;
+    this.saveTimer = null;
     this.pulseTimer = null;
     this.countTimer = null;
     this.flushing = false;
     ctx.blockConcurrencyWhile(async () => {
       const [st, chat] = await Promise.all([ctx.storage.get('st'), ctx.storage.get('chat')]);
-      if (st) this.st = { ...fresh(), ...st, settings: cleanSettings(st.settings) };
+      if (st) {
+        this.st = { ...fresh(), ...st, settings: cleanSettings(st.settings) };
+        this.st.requests = (this.st.requests || []).filter((r) => r.kind !== 'question').map((r) => ({ ...r, kind: 'request' }));
+      }
       if (Array.isArray(chat)) this.chat = chat;
     });
   }
@@ -84,7 +102,8 @@ export class LiveRoom {
     const att = ws.deserializeAttachment() || {};
     if (m.t === 'hello') return this.onHello(ws, m);
     if (!att.hello) return;
-    if (!att.owner && !this.allow(att.uid)) return this.send(ws, { t: 'err', code: 'rate' });
+    if (m.t === 'love') { if (!this.loveAllow(att.uid)) return; }
+    else if (!att.owner && !this.allow(att.uid)) return this.send(ws, { t: 'err', code: 'rate' });
     try {
       if (att.owner && att.console && (await this.onOwner(ws, att, m))) return;
       await this.onViewer(ws, att, m);
@@ -103,7 +122,7 @@ export class LiveRoom {
       const a = ws.deserializeAttachment();
       if (!a?.hello && now - (a?.at || 0) > HELLO_MS) { try { ws.close(4400, 'No hello'); } catch { /* already closed */ } }
     }
-    if (this.st.status === 'live') await this.flush();
+    if (this.st.status === 'live') { await this.flush(); await this.flushLove(); }
     await this.armAlarm();
   }
 
@@ -136,8 +155,45 @@ export class LiveRoom {
     ws.serializeAttachment(att);
     this.send(ws, this.view(att));
     this.sendHistory(ws, att);
+    if (!this.isBlocked(att)) {
+      this.send(ws, { t: 'poems', titles: this.st.poems });
+      this.send(ws, this.showFor(att));
+      this.noteJoin(att);
+    }
     this.scheduleCount();
     await this.armAlarm();
+    if (!owner && !this.isBlocked(att)) await this.recordView(att);
+  }
+
+  // A person's first arrival during the live is shown to the host once. Rejoining adds nothing here.
+  noteJoin(att) {
+    if (att.owner || this.st.status !== 'live' || this.st.joined[att.uid]) return;
+    if (Object.keys(this.st.joined).length >= MAX_JOINED) return;
+    this.st.joined[att.uid] = 1;
+    this.saveSoon();
+    this.toHost({ t: 'joined', name: att.name, uid8: att.uid.slice(0, 4) });
+  }
+
+  // Counts the view in the database (once per account, same rule as every other item) and tells the host
+  // only when it was a new view. Needs the SUPABASE_SERVICE_KEY secret; without it nothing is counted here.
+  async recordView(att) {
+    const item = this.st.itemId;
+    if (!item || this.viewed.has(att.uid)) return;
+    if (this.viewed.size > 5000) this.viewed.clear();
+    this.viewed.add(att.uid);
+    const r = await this.sb('POST', 'rpc/record_view_for', { p_item: item, p_user: att.uid });
+    if (!r || !r.ok) { this.viewed.delete(att.uid); return; }
+    let isNew = false;
+    try { isNew = (await r.json()) === true; } catch { /* not a boolean */ }
+    if (isNew) this.toHost({ t: 'view' });
+  }
+
+  loveAllow(uid) {
+    const now = Date.now();
+    if (now - (this.lastLove.get(uid) || 0) < LOVE_GAP_MS) return false;
+    this.lastLove.set(uid, now);
+    if (this.lastLove.size > 2000) this.lastLove.clear();
+    return true;
   }
 
   allow(uid) {
@@ -169,7 +225,6 @@ export class LiveRoom {
     return {
       chat,
       request: set.requestsEnabled ? base : 'off',
-      question: set.questionsEnabled ? base : 'off',
       react: set.reactionsEnabled ? (live || att.owner ? 'ok' : 'closed') : 'off',
     };
   }
@@ -187,7 +242,7 @@ export class LiveRoom {
     const set = this.st.settings;
     let list = this.st.requests.filter((r) => r.status !== 'dismissed');
     if (!att.owner && !set.requestsVisible) list = list.filter((r) => r.uid === att.uid);
-    return list.map((r) => ({ id: r.id, name: r.name, kind: r.kind, text: r.text, status: r.status, at: r.at, mine: r.uid === att.uid, ...(att.owner ? { uid: r.uid } : {}) }));
+    return list.map((r) => ({ id: r.id, name: r.name, kind: 'request', text: r.text, status: r.status, at: r.at, mine: r.uid === att.uid, ...(att.owner ? { uid: r.uid } : {}) }));
   }
 
   view(att) {
@@ -202,6 +257,7 @@ export class LiveRoom {
     v.audio = { epoch: s.broadcaster.epoch, online: s.broadcaster.online };
     if (set.showWatching || att.owner) v.watching = this.watching();
     v.requests = this.requestsFor(att);
+    if (att.owner || set.showReactionCounts) v.loveTotal = this.loveTotal();
     v.you = { uid: att.uid, name: att.name, owner: att.owner, anon: att.anon, ...this.caps(att) };
     return v;
   }
@@ -226,6 +282,18 @@ export class LiveRoom {
   }
 
   pushState() { this.each((ws, att) => this.send(ws, this.view(att))); }
+
+  // Only the host's laptop console receives these.
+  toHost(obj) { this.each((ws, att) => { if (att.owner && att.console) this.send(ws, obj); }); }
+
+  // The title and "playing" text reach viewers only while the host has show-title on.
+  showFor(att) {
+    const sh = this.st.show;
+    const open = att.owner || sh.on;
+    return { t: 'show', on: !!sh.on, poem: open ? sh.poem : '', playing: open ? sh.playing : '' };
+  }
+
+  loveTotal() { let n = 0; for (const k in this.st.love) n += this.st.love[k].taps; return n; }
 
   scheduleCount() {
     if (this.countTimer) return;
@@ -252,6 +320,12 @@ export class LiveRoom {
 
   /* ---------- storage ---------- */
   async save() { await this.ctx.storage.put({ st: this.st, chat: this.chat }); }
+
+  // Taps and joins can arrive many times a second, so they are saved together a moment later.
+  saveSoon() {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => { this.saveTimer = null; this.save().catch(() => {}); }, 2000);
+  }
 
   async armAlarm() {
     const needed = this.st.status === 'live' || this.ctx.getWebSockets().some((w) => !w.deserializeAttachment()?.hello);
@@ -291,6 +365,24 @@ export class LiveRoom {
     } finally { this.flushing = false; }
   }
 
+  // Saves each person's Love total. The row holds the running total, so repeating is safe.
+  async flushLove() {
+    if (this.lovingNow || !this.st.itemId) return;
+    const dirty = Object.entries(this.st.love).filter(([, v]) => v.dirty);
+    if (!dirty.length) return;
+    this.lovingNow = true;
+    try {
+      for (let i = 0; i < dirty.length; i += 500) {
+        const part = dirty.slice(i, i + 500);
+        const rows = part.map(([uid, v]) => ({ item_id: this.st.itemId, user_id: uid, taps: v.taps, updated_at: new Date().toISOString() }));
+        const r = await this.sb('POST', 'live_love?on_conflict=item_id,user_id', rows, 'resolution=merge-duplicates,return=minimal');
+        if (r && r.ok) { for (const [uid, v] of part) { const cur = this.st.love[uid]; if (cur && cur.taps === v.taps) cur.dirty = false; } }
+        else { if (r) console.warn('Saving love failed', r.status); break; }
+      }
+      await this.save();
+    } finally { this.lovingNow = false; }
+  }
+
   /* ---------- viewers ---------- */
   async onViewer(ws, att, m) {
     const s = this.st;
@@ -317,6 +409,20 @@ export class LiveRoom {
       return;
     }
 
+    if (m.t === 'love') {
+      if (this.caps(att).react !== 'ok' || s.status !== 'live') return;
+      const n = Math.min(LOVE_BATCH, Math.max(0, Math.floor(Number(m.n) || 0)));
+      if (!n) return;
+      const known = s.love[att.uid];
+      if (!known && Object.keys(s.love).length >= MAX_LOVERS) return;
+      const row = known || (s.love[att.uid] = { name: att.name, taps: 0, dirty: false });
+      row.name = att.name; row.taps += n; row.dirty = true;
+      this.saveSoon();
+      const out = { t: 'love', name: att.name, uid8: att.uid.slice(0, 4), n, total: row.taps, all: this.loveTotal() };
+      this.each((w, a) => { if (!this.isBlocked(a)) this.send(w, out); });
+      return;
+    }
+
     if (m.t === 'react') {
       if (this.caps(att).react !== 'ok') return;
       this.pulses[m.type === 'love' ? 'love' : 'like'] += 1;
@@ -325,10 +431,9 @@ export class LiveRoom {
     }
 
     if (m.t === 'request') {
-      const kind = m.kind === 'question' ? 'question' : 'request';
-      const caps = this.caps(att);
-      const can = kind === 'question' ? caps.question : caps.request;
-      if (can !== 'ok') return this.send(ws, { t: 'err', code: `${kind}-${can}` });
+      const kind = 'request';
+      const can = this.caps(att).request;
+      if (can !== 'ok') return this.send(ws, { t: 'err', code: `request-${can}` });
       const text = clean(m.text, 200);
       if (!text) return;
       const open = s.requests.filter((r) => r.uid === att.uid && (r.status === 'queued' || r.status === 'reading')).length;
@@ -337,7 +442,7 @@ export class LiveRoom {
       if (s.requests.length > MAX_REQUESTS) s.requests.splice(0, s.requests.length - MAX_REQUESTS);
       await this.save();
       this.pushState();
-      this.send(ws, { t: 'ok', what: kind });
+      this.send(ws, { t: 'ok', what: 'request' });
     }
   }
 
@@ -356,6 +461,26 @@ export class LiveRoom {
         s.title = clean(m.text, 120);
         await this.save(); this.pushState();
         return true;
+      case 'poems': {
+        const list = Array.isArray(m.titles) ? m.titles : [];
+        const seen = new Set();
+        const titles = [];
+        for (const t of list) {
+          const c = clean(t, POEM_CHARS);
+          if (c && !seen.has(c.toLowerCase())) { seen.add(c.toLowerCase()); titles.push(c); }
+          if (titles.length >= MAX_POEMS) break;
+        }
+        s.poems = titles;
+        await this.save();
+        this.each((w, a) => { if (!this.isBlocked(a)) this.send(w, { t: 'poems', titles }); });
+        return true;
+      }
+      case 'show': {
+        s.show = { on: m.title === true, poem: clean(m.poem, 120), playing: clean(m.playing, 80) };
+        await this.save();
+        this.each((w, a) => { if (!this.isBlocked(a)) this.send(w, this.showFor(a)); });
+        return true;
+      }
       case 'pin': {
         if (m.msgId) {
           const c = this.chat.find((x) => x.id === m.msgId && !x.del);
@@ -447,6 +572,7 @@ export class LiveRoom {
     ws.serializeAttachment({ ...att, live: true });
     await this.save();
     this.pushState();
+    if (first) this.each((w, a) => { if (!a.owner && !this.isBlocked(a)) this.noteJoin(a); });
     await this.armAlarm();
     if (first) await this.sb('PATCH', `live_sessions?item_id=eq.${s.itemId}`, { state: 'live', started_at: new Date(s.startedAt).toISOString() }, 'return=minimal');
     return true;
@@ -462,7 +588,8 @@ export class LiveRoom {
     await this.save();
     this.pushState();
     await this.flush();
-    const log = s.requests.map((r) => ({ name: r.name, kind: r.kind, text: r.text, status: r.status, at: r.at }));
+    await this.flushLove();
+    const log = s.requests.map((r) => ({ name: r.name, kind: 'request', text: r.text, status: r.status, at: r.at }));
     await this.sb('PATCH', `live_sessions?item_id=eq.${s.itemId}`,
       { state: 'ended', ended_at: new Date(s.endedAt).toISOString(), peak_viewers: s.peak, requests: log }, 'return=minimal');
   }

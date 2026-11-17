@@ -17,7 +17,7 @@ const hms = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); const hh = M
 const ERR = {
   'chat-off': 'Chat is off for this live.', 'chat-closed': 'Chat opens when the live starts.', 'chat-paused': 'Chat is paused for a moment.',
   'chat-muted': 'You cannot write in this chat.', 'chat-login': 'Sign in to write in the chat.',
-  'request-login': 'Sign in to send requests.', 'question-login': 'Sign in to ask questions.', 'request-closed': 'Requests open when the live starts.', 'question-closed': 'Questions open when the live starts.',
+  'request-login': 'Sign in to send requests.', 'request-closed': 'Requests open when the live starts.',
   'request-limit': 'You have enough open requests. Wait for one to be read.', slow: 'Slow mode is on. Wait a little before the next message.', rate: 'Too fast. Slow down a little.',
   login: 'This live is for signed-in accounts.', ended: 'This live has ended.',
 };
@@ -56,12 +56,11 @@ async function main() {
   const chatSend = h('button', { class: 'l-btn', type: 'button' }, 'Send');
   const chatPanel = h('section', { class: 'l-panel' }, h('h2', {}, 'Chat'), pin, chatBox, h('div', { class: 'l-form' }, chatIn, chatSend));
 
-  const kind = h('select', { 'aria-label': 'Type' }, h('option', { value: 'request' }, 'Poem request'), h('option', { value: 'question' }, 'Question'));
-  const reqIn = h('input', { placeholder: 'Which poem, or what would you ask?', maxlength: 200, 'aria-label': 'Your request' });
+  const reqIn = h('input', { placeholder: 'Which poem would you like to hear?', maxlength: 200, 'aria-label': 'Your request' });
   const reqSend = h('button', { class: 'l-btn', type: 'button' }, 'Send');
   const reqList = h('div');
   const reqNote = h('p', { class: 'l-meta', hidden: true });
-  const reqPanel = h('section', { class: 'l-panel' }, h('h2', {}, 'Requests and questions'), h('div', { class: 'l-form' }, kind, reqIn, reqSend), reqNote, reqList);
+  const reqPanel = h('section', { class: 'l-panel' }, h('h2', {}, 'Requests'), h('div', { class: 'l-form' }, reqIn, reqSend), reqNote, reqList);
   const gate = h('div', { class: 'l-panel l-gate', hidden: true });
 
   root.replaceChildren(h('div', { class: 'l-row' }, badge, h('span', { class: 'grow' }), meta), title, stage, audio, note, react, gate, chatPanel, reqPanel);
@@ -81,7 +80,7 @@ async function main() {
       else if (m.t === 'count') { if (S.room) S.room.watching = m.watching; }
       else if (m.t === 'react') { pops(m.love, m.like); }
       else if (m.t === 'err') { if (ERR[m.code]) toast(m.code === 'slow' && m.wait ? `Slow mode: wait ${m.wait}s.` : ERR[m.code]); }
-      else if (m.t === 'ok') toast(m.what === 'question' ? 'Question sent.' : 'Request sent.');
+      else if (m.t === 'ok') toast('Request sent.');
       paint();
     },
   });
@@ -137,7 +136,7 @@ async function main() {
   /* ----- chat and requests ----- */
   const sendChat = () => { const t = chatIn.value.trim(); if (!t) return; if (room.send({ t: 'chat', text: t })) chatIn.value = ''; else toast('Reconnecting. Try again in a moment.'); };
   chatSend.onclick = sendChat; chatIn.onkeydown = (e) => { if (e.key === 'Enter') sendChat(); };
-  const sendReq = () => { const t = reqIn.value.trim(); if (!t) return; if (room.send({ t: 'request', kind: kind.value, text: t })) reqIn.value = ''; else toast('Reconnecting. Try again in a moment.'); };
+  const sendReq = () => { const t = reqIn.value.trim(); if (!t) return; if (room.send({ t: 'request', kind: 'request', text: t })) reqIn.value = ''; else toast('Reconnecting. Try again in a moment.'); };
   reqSend.onclick = sendReq; reqIn.onkeydown = (e) => { if (e.key === 'Enter') sendReq(); };
 
   /* ----- painting ----- */
@@ -195,7 +194,7 @@ async function main() {
     note.hidden = S.conn === 'open';
     note.textContent = S.conn === 'open' ? '' : S.conn === 'reconnecting' ? 'Reconnecting to the live…' : 'Connecting to the live…';
     chatPanel.hidden = blocked || settings.chatEnabled === false || st === 'ended' && !S.chat.length;
-    reqPanel.hidden = blocked || (settings.requestsEnabled === false && settings.questionsEnabled === false) || st === 'ended';
+    reqPanel.hidden = blocked || settings.requestsEnabled === false || st === 'ended';
 
     // chat
     const ck = S.chat.length + ':' + (S.chat.at(-1)?.id || '');
@@ -213,17 +212,15 @@ async function main() {
     chatIn.placeholder = { ok: 'Write a message', closed: 'Chat opens when the live starts', paused: 'Chat is paused', muted: 'You cannot write here', login: 'Sign in to write', off: 'Chat is off' }[cc] || 'Write a message';
 
     // requests
-    const askOk = (caps.request === 'ok') || (caps.question === 'ok');
-    reqIn.disabled = reqSend.disabled = kind.disabled = !askOk;
-    kind.querySelector('[value=request]').disabled = caps.request !== 'ok'; kind.querySelector('[value=question]').disabled = caps.question !== 'ok';
-    if (S.room && kind.selectedOptions[0]?.disabled) kind.value = caps.request === 'ok' ? 'request' : 'question';
+    const askOk = caps.request === 'ok';
+    reqIn.disabled = reqSend.disabled = !askOk;
     reqNote.hidden = askOk;
-    reqNote.textContent = caps.request === 'login' || caps.question === 'login' ? 'Sign in to send requests.' : st !== 'live' ? 'Requests open when the live starts.' : '';
+    reqNote.textContent = caps.request === 'login' ? 'Sign in to send requests.' : st !== 'live' ? 'Requests open when the live starts.' : '';
     const rk = JSON.stringify((S.room?.requests || []).map((r) => [r.id, r.status]));
     if (rk !== reqKey) {
       const list = (S.room?.requests || []).filter((r) => r.status !== 'dismissed');
       reqList.replaceChildren(...(list.length ? list.map((r) => h('div', { class: `l-req ${r.status === 'reading' ? 'now' : r.status === 'done' ? 'done' : ''} ${r.mine ? 'mine' : ''}` },
-        h('span', { class: 'l-q' }, r.kind === 'question' ? 'question' : 'poem'), h('span', { class: 't' }, r.text), h('span', { class: 'l-meta' }, r.name))) : [h('p', { class: 'l-meta' }, settings.requestsVisible === false ? 'You will see your own requests here.' : 'No requests yet.')]));
+        h('span', { class: 'l-q' }, 'poem'), h('span', { class: 't' }, r.text), h('span', { class: 'l-meta' }, r.name))) : [h('p', { class: 'l-meta' }, settings.requestsVisible === false ? 'You will see your own requests here.' : 'No requests yet.')]));
       reqKey = rk;
     }
     if (!live && S.listening) { stopListen(); }

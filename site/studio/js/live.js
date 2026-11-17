@@ -71,7 +71,7 @@ export async function liveListView(nav) {
           h('div', { class: 'grow' }, h('b', {}, it.title || 'Untitled'), h('div', { class: 'small muted' }, label + (r.peak_viewers ? ` · peak ${r.peak_viewers}` : ''))),
           h('span', { class: 'badge', 'data-status': r.state === 'live' ? 'published' : '' }, r.state)));
       }
-    } catch (e) { body.replaceChildren(h('p', { class: 'error' }, 'Could not load: ' + (e.message || e) + '. Did you run migration 005_live.sql?')); }
+    } catch (e) { body.replaceChildren(h('p', { class: 'error' }, 'Could not load: ' + (e.message || e) + '. Did you run migrations 005_live.sql and 006_live_part1.sql?')); }
   }
   return wrap;
 }
@@ -155,7 +155,7 @@ export async function liveConsoleView(itemId, nav) {
 
   /* requests */
   const reqBox = h('div', { class: 'req-list' });
-  const reqCard = h('section', { class: 'card c-req' }, h('h3', {}, 'Requests and questions'), reqBox);
+  const reqCard = h('section', { class: 'card c-req' }, h('h3', {}, 'Requests'), reqBox);
 
   /* settings */
   const setBox = h('div', { class: 'set-list' });
@@ -178,7 +178,7 @@ export async function liveConsoleView(itemId, nav) {
   const reqLine = (r) => {
     const act = (a, l) => h('button', { class: 'btn small', type: 'button', onclick: () => engine.send({ t: 'req', id: r.id, action: a }) }, l);
     return h('div', { class: 'rline' + (r.status === 'reading' ? ' now' : '') + (r.status === 'done' ? ' done' : '') },
-      h('div', { class: 'grow' }, h('span', { class: 'badge' }, r.kind === 'question' ? 'question' : 'poem'), ' ', h('span', {}, r.text), h('div', { class: 'small muted' }, `${r.name} ·${(r.uid || '').slice(0, 4)}`)),
+      h('div', { class: 'grow' }, h('span', { class: 'badge' }, 'poem'), ' ', h('span', {}, r.text), h('div', { class: 'small muted' }, `${r.name} ·${(r.uid || '').slice(0, 4)}`)),
       r.status === 'reading' ? act('done', 'Done') : [act('reading', 'Reading'), r.status === 'done' ? act('queue', 'Requeue') : act('up', '↑')], act('dismiss', '✕'));
   };
   const field = (f) => {

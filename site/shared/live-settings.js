@@ -20,12 +20,11 @@ export const FIELDS = [
   { key: 'chatHistory', group: 'Chat', type: 'int', default: 50, min: 0, max: 200, unit: 'messages', label: 'Messages a new viewer sees on arrival' },
   // ---- reactions
   { key: 'reactionsEnabled', group: 'Reactions', type: 'bool', default: true, public: true, label: 'Like and Love are on' },
-  // ---- requests and questions
-  { key: 'requestsEnabled', group: 'Requests and questions', type: 'bool', default: true, public: true, label: 'Viewers can request a poem' },
-  { key: 'questionsEnabled', group: 'Requests and questions', type: 'bool', default: true, public: true, label: 'Viewers can ask a question' },
-  { key: 'requestsVisible', group: 'Requests and questions', type: 'bool', default: true, public: true, label: 'Everyone sees the request queue', hint: 'Off means each person sees only their own.' },
-  { key: 'requestsGuests', group: 'Requests and questions', type: 'bool', default: true, label: 'Guests can send requests and questions' },
-  { key: 'requestsPerViewer', group: 'Requests and questions', type: 'int', default: 3, min: 1, max: 10, unit: 'open at a time', label: 'Limit per person' },
+  // ---- requests
+  { key: 'requestsEnabled', group: 'Requests', type: 'bool', default: true, public: true, label: 'Viewers can request a poem' },
+  { key: 'requestsVisible', group: 'Requests', type: 'bool', default: true, public: true, label: 'Everyone sees the request queue', hint: 'Off means each person sees only their own.' },
+  { key: 'requestsGuests', group: 'Requests', type: 'bool', default: true, label: 'Guests can send requests' },
+  { key: 'requestsPerViewer', group: 'Requests', type: 'int', default: 3, min: 1, max: 10, unit: 'open at a time', label: 'Limit per person' },
   // ---- audio
   { key: 'audioKbps', group: 'Audio', type: 'choice', default: 96, number: true, label: 'Quality sent to viewers',
     options: [[32, '32 kbps (smallest, voice only)'], [64, '64 kbps'], [96, '96 kbps (recommended for voice over music)'], [128, '128 kbps (best, most data)']],
