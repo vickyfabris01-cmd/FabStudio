@@ -11,7 +11,7 @@ export const FIELDS = [
   // ---- what viewers see
   { key: 'showViewCount', group: 'What viewers see', type: 'bool', default: true, public: true, label: 'Show the view count' },
   { key: 'showWatching', group: 'What viewers see', type: 'bool', default: true, public: true, label: 'Show how many are watching now' },
-  { key: 'showReactionCounts', group: 'What viewers see', type: 'bool', default: true, public: true, label: 'Show Like and Love counts' },
+  { key: 'showReactionCounts', group: 'What viewers see', type: 'bool', default: true, public: true, label: 'Show the Love count' },
   // ---- chat
   { key: 'chatEnabled', group: 'Chat', type: 'bool', default: true, public: true, label: 'Chat is on' },
   { key: 'chatGuests', group: 'Chat', type: 'bool', default: true, label: 'Guests can chat', hint: 'Off means only signed-in accounts can write.' },
@@ -19,7 +19,7 @@ export const FIELDS = [
   { key: 'chatMaxLength', group: 'Chat', type: 'int', default: 200, min: 20, max: 300, unit: 'characters', label: 'Longest message' },
   { key: 'chatHistory', group: 'Chat', type: 'int', default: 50, min: 0, max: 200, unit: 'messages', label: 'Messages a new viewer sees on arrival' },
   // ---- reactions
-  { key: 'reactionsEnabled', group: 'Reactions', type: 'bool', default: true, public: true, label: 'Like and Love are on' },
+  { key: 'reactionsEnabled', group: 'Reactions', type: 'bool', default: true, public: true, label: 'Love is on' },
   // ---- requests
   { key: 'requestsEnabled', group: 'Requests', type: 'bool', default: true, public: true, label: 'Viewers can request a poem' },
   { key: 'requestsVisible', group: 'Requests', type: 'bool', default: true, public: true, label: 'Everyone sees the request queue', hint: 'Off means each person sees only their own.' },

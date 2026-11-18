@@ -1,4 +1,4 @@
-// The public live page: countdown, listen, chat, requests, reactions. The room (a Cloudflare Durable Object)
+// The public live page: countdown, listen, chat, requests, Love. The room (a Cloudflare Durable Object)
 // carries everything that is live; Supabase carries what is kept (title, counters, reactions, saved chat).
 import { h, fmtWhen, toast } from '../shared/dom.js';
 import { connectRoom } from '../shared/live-socket.js';
@@ -8,7 +8,10 @@ import * as data from './data.js';
 
 const svg = (d) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return s.firstChild; };
 const LOVE = '<path d="M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572"/>';
-const LIKE = '<path d="M7 11v8a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-7a1 1 0 0 1 1 -1h3a4 4 0 0 0 4 -4v-1a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 2 0 0 1 -2 2h-7a3 3 0 0 1 -3 -3"/>';
+const PAUSE = '<path d="M6 5m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z"/><path d="M14 5m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z"/>';
+const PLAY = '<path d="M7 4v16l13 -8z"/>';
+const VOL = '<path d="M15 8a5 5 0 0 1 0 8"/><path d="M17.7 5a9 9 0 0 1 0 14"/><path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5"/>';
+const MUTE = '<path d="M15 8a5 5 0 0 1 1.912 4.934m-1.377 2.602a5 5 0 0 1 -.535 .464"/><path d="M17.7 5a9 9 0 0 1 2.362 11.086m-1.676 2.299a9 9 0 0 1 -.686 .615"/><path d="M9.069 5.054l.431 -.554a.8 .8 0 0 1 1.5 .5v2m0 4v8a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l1.294 -1.664"/><path d="M3 3l18 18"/>';
 const EYE = '<path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/>';
 const SEND = '<path d="M10 14l11 -11"/><path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5"/>';
 const CHEV = '<path d="M6 9l6 6l6 -6"/>';
@@ -35,7 +38,7 @@ async function main() {
   guestReady().then((s) => { if (s) data.recordView(id, s.user.id); });
 
   const S = {
-    row, room: null, chat: [], listening: false, mine: new Set(), conn: 'connecting', q: null, pull: null, stopQ: null, epoch: -1,
+    row, room: null, chat: [], listening: false, mine: new Set(), conn: 'connecting', q: null, pull: null, stopQ: null, epoch: -1, muted: false, meter: null, raf: 0,
     skew: 0,                       // server clock minus this phone's clock
     stopped: false, blocked: false, failedAt: 0,   // listening: stopped by the person / browser blocked autoplay / last failure
     poems: [], show: { on: false, poem: '', playing: '' },
@@ -48,7 +51,13 @@ async function main() {
   const badge = h('span', { class: 'l-badge' });
   const clockEl = h('b', { class: 'l-clock' });
   const watchEl = h('span', { class: 'l-meta l-watch' });
-  const cardTop = h('div', { class: 'l-row l-cardtop' }, badge, clockEl, h('span', { class: 'grow' }), watchEl);
+  // Under ● LIVE: pause / play. Under the watching count: mute / unmute. Line icons, no text.
+  const playBtn = h('button', { class: 'l-ctl', type: 'button', hidden: true });
+  const muteBtn = h('button', { class: 'l-ctl', type: 'button', hidden: true });
+  const bars = h('div', { class: 'l-bars', 'aria-hidden': 'true' }, Array.from({ length: 14 }, () => h('b')));   // moved by the real sound level (see startMeter)
+  const cardTop = h('div', { class: 'l-cardtop2' },
+    h('div', { class: 'l-ctop-left' }, h('div', { class: 'l-row l-cardtop' }, badge, clockEl), playBtn),
+    h('div', { class: 'l-ctop-right' }, watchEl, muteBtn));
   const title = h('h1');
   const stageImg = row.public_thumb_key ? h('img', { src: data.mediaUrl(row.public_thumb_key), alt: '' }) : null;
   const over = h('div', { class: 'l-over' });
@@ -58,14 +67,15 @@ async function main() {
   const note = h('div', { class: 'l-note', hidden: true });
   const before = h('p', { class: 'l-meta', hidden: true }, 'Chat and requests open when the live starts.');
 
-  // pills: views, love (a count), like (a toggle), and the Request list
+  // pills: views, love (a count), and the Request list
   const viewsPill = h('span', { class: 'l-pill' }, svg(EYE), h('b', { class: 'n' }));
   const lovePill = h('span', { class: 'l-pill love' }, svg(LOVE), h('b', { class: 'n' }));
-  const likeBtn = h('button', { class: 'l-pill', type: 'button', 'aria-label': 'Like' }, svg(LIKE), h('b', { class: 'n' }));
   const reqBtn = h('button', { class: 'l-pill req', type: 'button', 'aria-haspopup': 'listbox' }, h('span', {}, 'Request'), svg(CHEV));
-  const reqMenu = h('div', { class: 'l-menu', role: 'listbox', hidden: true });
-  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, likeBtn, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
-  const counts = { like: row.n_like || 0 };
+  // the Request list: the first six poems show, the rest are reached by scrolling the list; "Other poem…" stays pinned under it
+  const reqList = h('div', { class: 'l-menulist' });
+  const reqOther = h('button', { type: 'button', role: 'option', class: 'other', onclick: () => { S.reqMode = true; S.menu = false; paint(); chatIn.focus(); } }, 'Other poem…');
+  const reqMenu = h('div', { class: 'l-menu', role: 'listbox', hidden: true }, reqList, reqOther);
+  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
 
   const feed = h('div', { class: 'l-feed', role: 'log', 'aria-live': 'polite' });
 
@@ -128,7 +138,6 @@ async function main() {
       else if (m.t === 'chat') S.chat = [...S.chat, { ...m.msg, kind: 'chat' }].slice(-200);
       else if (m.t === 'chatDel') S.chat = S.chat.filter((c) => c.id !== m.id);
       else if (m.t === 'count') { if (S.room) S.room.watching = m.watching; }
-      else if (m.t === 'react') { pops(m.like); }
       else if (m.t === 'love') onLove(m);
       else if (m.t === 'poems') S.poems = Array.isArray(m.titles) ? m.titles : [];
       else if (m.t === 'show') S.show = { on: !!m.on, poem: m.poem || '', playing: m.playing || '' };
@@ -148,7 +157,7 @@ async function main() {
     S.listening = true; S.blocked = false; paint();
     try {
       S.pull = await pullAudio({ item: id, getToken: token, onStream: (st) => {
-        audio.srcObject = st;
+        audio.srcObject = st; audio.muted = S.muted; startMeter(st);
         Promise.resolve(audio.play()).then(() => { S.blocked = false; paint(); }).catch(() => { S.blocked = true; paint(); });  // the browser may need one tap
       } });
       S.stopQ = watchQuality(S.pull.pc, (q) => { S.q = q; paintQ(); });
@@ -159,7 +168,7 @@ async function main() {
     }
     paint();
   }
-  function stopListen() { S.blocked = false; S.stopQ?.(); S.stopQ = null; try { S.pull?.close(); } catch { /* closed */ } S.pull = null; audio.srcObject = null; S.listening = false; S.q = null; }
+  function stopListen() { stopMeter(); S.blocked = false; S.stopQ?.(); S.stopQ = null; try { S.pull?.close(); } catch { /* closed */ } S.pull = null; audio.srcObject = null; S.listening = false; S.q = null; }
   async function relisten() { stopListen(); await listen(true); }
   function onAudioEpoch() {
     const a = S.room?.audio;
@@ -171,25 +180,51 @@ async function main() {
   function paintQ() { const q = els.q; q.textContent = S.q ? { good: 'Audio: good', fair: 'Audio: some stutter', poor: 'Audio: poor connection', stalled: 'Audio: no data' }[S.q.quality] : ''; q.className = 'l-q-ind ' + (S.q?.quality || ''); }
 
   /* ----- Like is a toggle kept in the database; Love is a burst of taps carried by the room ----- */
-  const mineLoaded = (async () => { const s2 = await guestReady(); if (s2) { try { (await data.myReactions(id, s2.user.id)).forEach((t) => S.mine.add(t)); paint(); } catch { /* ignore */ } } })();
-  async function toggle(type) {
-    const s2 = await requireAuth(); if (!s2) return;
-    try {
-      if (S.mine.has(type)) { await data.clearReaction(id, s2.user.id, type); S.mine.delete(type); counts[type] -= 1; }
-      else { await data.setReaction(id, s2.user.id, type); S.mine.add(type); counts[type] += 1; room.send({ t: 'react', type }); }
-      paint();
-    } catch (e) { toast(data.friendly(e)); }
-  }
-  likeBtn.onclick = () => toggle('like');
-
   const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-  function pops(like) {
-    if (calm()) return;
-    for (let i = 0; i < Math.min(4, like || 0); i++) {
-      const e = h('span', { class: 'l-pop', style: `left:${10 + Math.random() * 80}%;bottom:8%` }, '👍');
-      stage.append(e); setTimeout(() => e.remove(), 1700);
-    }
+
+  /* ----- the bars follow the real sound: the incoming stream goes through an analyser (it is not wired to the speakers; the <audio> element plays it) ----- */
+  function startMeter(stream) {
+    stopMeter();
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = new AC();
+      const src = ctx.createMediaStreamSource(stream);
+      const an = ctx.createAnalyser(); an.fftSize = 256; an.smoothingTimeConstant = 0.6;
+      src.connect(an);
+      const m = { ctx, src, an, buf: new Uint8Array(an.frequencyBinCount) };
+      S.meter = m;
+      ctx.resume?.().catch(() => {});
+      const els2 = [...bars.children];
+      const step = () => {
+        if (S.meter !== m) return;
+        an.getByteFrequencyData(m.buf);
+        const n = els2.length;
+        for (let i = 0; i < n; i++) {
+          const lo = 1 + Math.floor((i * 44) / n); const hi = Math.max(lo + 1, 1 + Math.floor(((i + 1) * 44) / n));
+          let sum = 0; for (let k = lo; k < hi; k++) sum += m.buf[k] || 0;
+          els2[i].style.height = Math.max(8, Math.min(100, Math.round((sum / (hi - lo) / 170) * 100))) + '%';
+        }
+        S.raf = requestAnimationFrame(step);
+      };
+      if (!calm()) step();
+    } catch { /* no analyser here: the bars just stay low */ }
   }
+  function stopMeter() {
+    cancelAnimationFrame(S.raf); S.raf = 0;
+    const m = S.meter; S.meter = null;
+    if (m) { try { m.src.disconnect(); m.ctx.close(); } catch { /* already closed */ } }
+    [...bars.children].forEach((b) => { b.style.height = ''; });
+  }
+
+  /* ----- pause / play (under LIVE) and mute (under the watching count) ----- */
+  // Pause really stops the stream and Play joins it again at the live edge (a paused live stream would only fall behind).
+  playBtn.onclick = () => {
+    if (S.listening && S.blocked) { audio.play().then(() => { S.blocked = false; S.meter?.ctx.resume?.(); paint(); }).catch(() => toast('The browser still blocks the sound.')); return; }
+    if (S.listening) { S.stopped = true; stopListen(); paint(); return; }
+    S.stopped = false; listen();
+  };
+  muteBtn.onclick = () => { S.muted = !S.muted; audio.muted = S.muted; paint(); };
   // Hearts rise above the box. Each tap shows at once; taps are sent to the room in small batches.
   function heart(n = 1) {
     if (calm()) return;
@@ -284,15 +319,10 @@ async function main() {
       const kids = [];
       if (S.show.on && S.show.poem) kids.push(h('div', { class: 'l-poem' }, S.show.poem));
       if (S.show.on && S.show.playing) kids.push(h('div', { class: 'l-play' }, `♪ Playing ${S.show.playing}`));
-      if (S.listening && S.blocked) {
-        kids.push(h('button', { class: 'l-btn', type: 'button', onclick: () => audio.play().then(() => { S.blocked = false; paint(); }).catch(() => toast('The browser still blocks the sound.')) }, 'Tap to listen'));
-      } else if (S.listening) {
-        kids.push(h('div', { class: 'l-bars', 'aria-hidden': 'true' }, Array.from({ length: 14 }, () => h('b'))), h('p', { class: 'l-meta' }, audioOn ? '' : 'The host\'s audio is reconnecting…'));
-      } else {
-        kids.push(h('button', { class: 'l-btn', type: 'button', disabled: !audioOn, onclick: () => { S.stopped = false; listen(); } }, audioOn ? 'Listen live' : 'Starting…'));
-        if (!audioOn) kids.push(h('p', { class: 'l-meta' }, 'The audio will start in a moment.'));
-      }
-      if (S.listening) kids.push(h('div', { class: 'l-row l-listenrow' }, els.q, h('button', { class: 'l-link', type: 'button', onclick: () => { S.stopped = true; stopListen(); paint(); } }, 'Stop listening')));
+      if (S.listening && S.blocked) kids.push(h('p', { class: 'l-meta' }, 'Tap play to listen.'));
+      else if (S.listening) kids.push(bars, h('p', { class: 'l-meta' }, audioOn ? '' : 'The host\'s audio is reconnecting…'));
+      else kids.push(h('p', { class: 'l-meta' }, S.stopped ? 'Paused. Tap play to listen.' : audioOn ? 'Connecting the audio…' : 'The audio will start in a moment.'));
+      if (S.listening) kids.push(h('div', { class: 'l-row l-listenrow' }, els.q));
       over.replaceChildren(...kids.filter(Boolean));
     }
     paintQ();
@@ -308,19 +338,26 @@ async function main() {
     const reactOn = settings.reactionsEnabled !== false && S.row.reactions_enabled;
     lovePill.hidden = !reactOn;
     lovePill.querySelector('.n').textContent = showCounts ? String(Math.max(0, live ? (S.loveTotal ?? 0) : (S.row.n_love || 0))) : '';
-    likeBtn.hidden = !reactOn;
-    likeBtn.classList.toggle('on', S.mine.has('like'));
-    likeBtn.querySelector('.n').textContent = showCounts ? String(Math.max(0, counts.like)) : '';
     const askShown = live && settings.requestsEnabled !== false;
     reqBtn.hidden = !askShown;
     reqBtn.classList.toggle('open', S.menu);
     reqMenu.hidden = !(S.menu && askShown);
-    const mk = S.poems.join('|');
+    const mk = '#' + S.poems.join('|');   // the '#' makes an empty list differ from the starting key, so "Other poem…" always gets drawn
     if (mk !== menuKey) {
-      reqMenu.replaceChildren(...S.poems.map((t2) => h('button', { type: 'button', role: 'option', onclick: () => askFor(t2) }, t2)),
-        h('button', { type: 'button', role: 'option', class: 'other', onclick: () => { S.reqMode = true; S.menu = false; paint(); chatIn.focus(); } }, 'Other poem…'));
+      reqList.replaceChildren(...S.poems.map((t2) => h('button', { type: 'button', role: 'option', onclick: () => askFor(t2) }, t2)));
+      reqList.hidden = !S.poems.length;
       menuKey = mk;
     }
+
+    // pause / play and mute
+    const showCtl = live && !blocked;
+    playBtn.hidden = muteBtn.hidden = !showCtl;
+    const playing = S.listening && !S.blocked;
+    if (playBtn.dataset.k !== (playing ? 'pause' : 'play')) { playBtn.dataset.k = playing ? 'pause' : 'play'; playBtn.replaceChildren(svg(playing ? PAUSE : PLAY)); }
+    playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play'); playBtn.title = playing ? 'Pause' : 'Play';
+    playBtn.disabled = !S.listening && !audioOn;
+    if (muteBtn.dataset.k !== (S.muted ? 'm' : 'v')) { muteBtn.dataset.k = S.muted ? 'm' : 'v'; muteBtn.replaceChildren(svg(S.muted ? MUTE : VOL)); }
+    muteBtn.setAttribute('aria-label', S.muted ? 'Unmute' : 'Mute'); muteBtn.title = S.muted ? 'Unmute' : 'Mute';
 
     // gates and notes
     gate.hidden = !blocked;
@@ -351,7 +388,6 @@ async function main() {
     if (ended) {
       stats.replaceChildren(h('span', { class: 'l-pill' }, svg(EYE), h('b', {}, String(S.row.n_views ?? 0))),
         h('span', { class: 'l-pill love' }, svg(LOVE), h('b', {}, String(S.row.n_love ?? 0))),
-        h('span', { class: 'l-pill' }, svg(LIKE), h('b', {}, String(Math.max(0, counts.like)))),
         h('span', { class: 'grow' }), h('a', { class: 'l-link', href: '/' }, 'More poems'));
     }
     waitBox.hidden = !ended || ready || blocked;
@@ -386,6 +422,5 @@ async function main() {
 
   paint();
   setInterval(() => { if (status() !== 'ended') paint(); }, 1000);
-  await mineLoaded;
 }
 main();

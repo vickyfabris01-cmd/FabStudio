@@ -1,7 +1,7 @@
 // FabStudio service worker: makes the app open offline.
 // Files are served from cache instantly and refreshed in the background,
 // so a new deploy shows up on the second open. Bump CACHE only to force a full reset.
-const CACHE = 'fabstudio-shell-v8';
+const CACHE = 'fabstudio-shell-v9';
 const SHELL = [
   '/studio/', '/studio/index.html', '/studio/manifest.webmanifest', '/studio/css/studio.css',
   '/studio/js/app.js', '/studio/js/db.js', '/studio/js/ui.js', '/studio/js/auth.js', '/studio/js/api.js',

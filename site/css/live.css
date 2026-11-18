@@ -11,6 +11,14 @@
 .l-stage .l-over { text-align: center; padding: .4rem 0 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .l-stage .l-over p { margin: .25rem 0; }
 .l-cardtop { flex-wrap: nowrap; min-height: 1.6rem; }
+.l-cardtop2 { display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; }
+.l-ctop-left, .l-ctop-right { display: flex; flex-direction: column; gap: .4rem; }
+.l-ctop-right { align-items: flex-end; text-align: right; }
+.l-ctl { width: 36px; height: 36px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); background: rgba(20, 18, 26, .55); color: var(--text); cursor: pointer; padding: 0; }
+.l-ctl svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.l-ctl[hidden] { display: none; }
+.l-ctl:disabled { opacity: .45; cursor: default; }
+.l-stage:not(.is-live) .l-ctl { display: none; }
 .l-clock { font-variant-numeric: tabular-nums; font-size: 1rem; }
 .l-stage:not(.is-live) .l-clock, .l-stage:not(.is-live) .l-watch { display: none; }
 .l-poem { font: 600 1.15rem var(--serif); margin-top: .3rem; }
@@ -22,10 +30,7 @@
 .l-btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
 .l-btn:disabled { opacity: .5; }
 .l-bars { display: flex; gap: 4px; align-items: end; justify-content: center; height: 34px; margin-top: .8rem; }
-.l-bars b { width: 5px; background: var(--accent); border-radius: 3px; height: 20%; animation: lbar 1s ease-in-out infinite; }
-.l-bars b:nth-child(2n) { animation-delay: .25s; } .l-bars b:nth-child(3n) { animation-delay: .5s; }
-@keyframes lbar { 50% { height: 100%; } }
-@media (prefers-reduced-motion: reduce) { .l-bars b { animation: none; height: 60%; } }
+.l-bars b { width: 5px; background: var(--accent); border-radius: 3px; height: 8%; transition: height .08s linear; }
 .l-row { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
 .l-row .grow { flex: 1; }
 .l-meta { color: var(--muted); font-size: .9rem; }
@@ -67,14 +72,18 @@ button.l-pill.on svg { fill: currentColor; }
 .l-pill.req { color: var(--accent); border-color: var(--accent); }
 .l-pill.req.open svg { transform: rotate(180deg); }
 .l-reqwrap { position: relative; display: inline-block; }
-.l-menu { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 30; min-width: 220px; max-width: min(86vw, 340px); max-height: 50vh; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .3rem; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+.l-menu { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 30; min-width: 220px; max-width: min(86vw, 340px); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .3rem; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
 .l-menu[hidden] { display: none; }
+.l-menulist { max-height: calc(6 * 44px); overflow-y: auto; overscroll-behavior: contain; }
+.l-menulist[hidden] { display: none; }
 .l-menu button { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 8px; padding: .55rem .7rem; min-height: 44px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .l-menu button:hover, .l-menu button:focus-visible { background: var(--bg); }
 .l-menu .other { color: var(--accent); border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
 .live.is-live { display: flex; flex-direction: column; height: calc(100dvh - 68px - var(--dock-h, 64px)); min-height: 340px; padding-bottom: .4rem; }
 .live.is-live .l-stage { flex: none; }
-.l-feed { flex: 1; min-height: 120px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: .5rem .75rem; margin-top: .4rem; }
+.l-feed { display: flex; flex-direction: column; flex: 1; min-height: 120px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: .5rem .75rem; margin-top: .4rem; }
+.l-feed > * { flex: none; }
+.l-feed > :first-child { margin-top: auto; }
 .l-line { font-size: .94rem; padding: .15rem 0; word-break: break-word; }
 .l-line.host b { color: var(--accent); }
 .l-line.love { color: var(--danger); }

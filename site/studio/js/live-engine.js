@@ -157,10 +157,10 @@ class LiveEngine extends EventTarget {
     } catch { /* the counts then start from zero */ }
   }
 
-  // Titles of poems with more than 5 stanzas, for the viewers' Request list. Titles only, never text.
+  // Titles of the studio's poems, for the viewers' Request list. Titles only, never text.
   async sendPoems() {
     try {
-      const rows = (await db.poems.toArray()).filter((p) => !p.deletedAt && (p.stanzas?.length || 0) > 5 && (p.title || '').trim());
+      const rows = (await db.poems.toArray()).filter((p) => !p.deletedAt && (p.title || '').trim());   // every titled poem in the studio list
       rows.sort((a, b) => a.title.localeCompare(b.title));
       this.send({ t: 'poems', titles: rows.map((p) => p.title.trim().slice(0, 60)).slice(0, 40) });
     } catch { /* the list stays as it was */ }
