@@ -121,3 +121,16 @@ body.has-dock .foot { display: none; }
 .l-wtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .l-wbar { height: 3px; background: var(--line); border-radius: 2px; margin-top: .4rem; overflow: hidden; }
 .l-wbar i { display: block; height: 100%; width: 0; background: var(--accent); }
+
+/* ---------- Header: logo, centered live title, account ---------- */
+.top.live-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .6rem; padding: .5rem 1.1rem; }   /* phone: the title is centered between the logo and the account button */
+@media (min-width: 560px) { .top.live-top { grid-template-columns: minmax(7.5rem, 1fr) minmax(0, 28rem) minmax(7.5rem, 1fr); } }   /* wider: centered on the page */
+.live-logo-link { justify-self: start; display: inline-flex; line-height: 0; }
+.live-logo { width: 44px; height: 44px; display: block; object-fit: contain; }
+.live-top .chip { justify-self: end; max-width: 11rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-title { min-width: 0; overflow: hidden; white-space: nowrap; text-align: center; font-family: var(--serif); font-size: 1.05rem; color: var(--text);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); }
+.live-title > span { display: inline-block; }
+.live-title.slide > span { animation: ltitle var(--t, 8s) linear infinite alternate; }
+@keyframes ltitle { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(calc(-1 * var(--d, 0px))); } }
+@media (prefers-reduced-motion: reduce) { .live-title.slide > span { animation: none; } .live-title { text-overflow: ellipsis; -webkit-mask-image: none; mask-image: none; } }

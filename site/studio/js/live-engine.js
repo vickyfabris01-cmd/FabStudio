@@ -49,10 +49,11 @@ class LiveEngine extends EventTarget {
     const settings = cleanSettings(row.settings, DEFAULT_SETTINGS);
     this.s = { ...fresh(), itemId, row: { ...row, settings, title: item.title, description: item.description }, phase: row.state === 'ended' ? 'ended' : 'idle', captureId: row.capture_id, markers: Array.isArray(row.markers) ? row.markers : [] };
     this.seenReq = new Set();
+    this.helloed = false;
     this.loadCounts(itemId);
     this.room = connectRoom({
       item: itemId, getToken, console: true,
-      onStatus: (c) => { this.set({ conn: c }); if (c === 'open') this.onOpen(); },
+      onStatus: (c) => { if (c !== 'open') this.helloed = false; this.set({ conn: c }); },   // onOpen() now runs when the room's first 'state' arrives, i.e. after it has accepted our hello
       onMessage: (m) => this.onMessage(m),
     });
     this.emit();
@@ -81,6 +82,7 @@ class LiveEngine extends EventTarget {
     const s = this.s;
     switch (m.t) {
       case 'state':
+        if (!this.helloed && this.room) { this.helloed = true; this.onOpen(); }
         s.room = m;
         if (m.ownerSettings && s.row) s.row.settings = m.ownerSettings;
         if (typeof m.watching === 'number') s.watching = m.watching;

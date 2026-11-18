@@ -58,7 +58,22 @@ async function main() {
   const cardTop = h('div', { class: 'l-cardtop2' },
     h('div', { class: 'l-ctop-left' }, h('div', { class: 'l-row l-cardtop' }, badge, clockEl), playBtn),
     h('div', { class: 'l-ctop-right' }, watchEl, muteBtn));
-  const title = h('h1');
+  // the live title sits in the page header, centered; a long one slides instead of stretching the header
+  const titleBox = document.getElementById('liveTitle');
+  const titleEl = document.getElementById('liveTitleText');
+  let titleNow = null;
+  const fitTitle = () => {
+    titleBox.classList.remove('slide');
+    const over = titleEl.scrollWidth - titleBox.clientWidth;
+    if (over > 2) {
+      titleBox.style.setProperty('--d', over + 'px');
+      titleBox.style.setProperty('--t', Math.max(6, (over / 25) * 2) + 's');   // about 25px a second
+      titleBox.classList.add('slide');
+    }
+  };
+  const setTitle = (t) => { if (t === titleNow) return; titleNow = t; titleEl.textContent = t; titleBox.title = t; fitTitle(); };   // paint() runs every second: only measure when the text changed
+  if ('ResizeObserver' in window) new ResizeObserver(fitTitle).observe(titleBox); else addEventListener('resize', fitTitle);
+  document.fonts?.ready?.then(fitTitle);
   const stageImg = row.public_thumb_key ? h('img', { src: data.mediaUrl(row.public_thumb_key), alt: '' }) : null;
   const over = h('div', { class: 'l-over' });
   const stage = h('div', { class: 'l-stage' }, stageImg, h('div', { class: 'l-stagebody' }, cardTop, over));
@@ -111,7 +126,7 @@ async function main() {
   const bubbles = h('div', { class: 'l-bubbles', 'aria-hidden': 'true' });
   const dock = h('div', { class: 'l-dock', hidden: true }, bubbles, h('div', { class: 'l-dockin' }, loveBtn, h('div', { class: 'l-box' }, modeChip, chatIn), sendBtn));
 
-  root.replaceChildren(stage, audio, title, before, pills, gate, note, feed, waitBox, stats);
+  root.replaceChildren(stage, audio, before, pills, gate, note, feed, waitBox, stats);
   document.body.append(dock);
 
   const els = { q: h('div', { class: 'l-q-ind' }) };
@@ -292,8 +307,7 @@ async function main() {
     const live = st === 'live';
     const ended = st === 'ended';
     const audioOn = !!S.room?.audio?.online;
-    title.textContent = S.room?.title || S.row.title;
-    title.className = live ? 'l-evt' : '';
+    setTitle(S.room?.title || S.row.title);
     badge.textContent = live ? '● LIVE' : ended ? 'ENDED' : 'UPCOMING';
     badge.className = 'l-badge' + (live ? ' on' : '');
 
