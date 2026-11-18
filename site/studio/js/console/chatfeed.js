@@ -8,7 +8,6 @@ export function chatPane(engine, stats) {
   let tab = 'chats';
   let seenChats = 0; let seenReq = 0;
   let feedKey = ''; let reqKey = '';
-  let seenPulse = null;   // the last Love message already shown as hearts (null until the first paint, so old ones never replay)
 
   const tabChats = h('button', { class: 'tab on', type: 'button' }, 'Chats ', h('span', { class: 'ubadge', hidden: true }));
   const tabReq = h('button', { class: 'tab', type: 'button' }, 'Requests ', h('span', { class: 'ubadge', hidden: true }));
@@ -17,15 +16,6 @@ export function chatPane(engine, stats) {
   const chatIn = h('input', { placeholder: 'Say something as the host…', maxlength: 300, 'aria-label': 'Message' });
   const send = () => { const t = chatIn.value.trim(); if (t) { engine.send({ t: 'chat', text: t }); chatIn.value = ''; } };
   chatIn.onkeydown = (e) => { if (e.key === 'Enter') send(); };
-  const hearts = h('div', { class: 'c-hearts', 'aria-hidden': 'true' });
-  // Hearts rise over the chat when viewers tap Love. Same idea as the public page: at most 3 per burst.
-  const burst = (n) => {
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    for (let i = 0; i < Math.min(3, n || 1); i++) {
-      const e = h('span', { class: 'c-heart', style: `left:${4 + Math.random() * 44}px;animation-delay:${i * 90}ms` }, loveIcon(22));
-      hearts.append(e); setTimeout(() => e.remove(), 1900);
-    }
-  };
   const composer = h('div', { class: 'row' }, h('div', { class: 'grow' }, chatIn), h('button', { class: 'btn small', type: 'button', onclick: send }, 'Send'));
 
   const open = (which) => {
@@ -83,12 +73,10 @@ export function chatPane(engine, stats) {
     const nChats = all.filter((e) => e.seq > Math.max(seenChats, base) && mine(e)).length;
     const nReq = s.events.filter((e) => e.kind === 'request' && e.seq > Math.max(seenReq, base)).length;
     for (const [btn, n] of [[tabChats, nChats], [tabReq, nReq]]) { const b = btn.querySelector('.ubadge'); b.hidden = !n; b.textContent = n > 99 ? '99+' : String(n); }
-    const lp = s.lovePulse;
-    if (lp && lp.k !== seenPulse) { if (seenPulse !== null && tab === 'chats') burst(lp.n); seenPulse = lp.k; }
     const closed = s.phase === 'ended' || room?.you?.chat === 'closed';
     chatIn.disabled = closed;
   }
 
-  const el = h('section', { class: 'card c-chat' }, h('div', { class: 'row c-tabs' }, tabChats, tabReq, h('span', { class: 'grow' }), stats || null), feed, reqBox, composer, hearts);
+  const el = h('section', { class: 'card c-chat' }, h('div', { class: 'row c-tabs' }, tabChats, tabReq, h('span', { class: 'grow' }), stats || null), feed, reqBox, composer);
   return { el, paint };
 }
