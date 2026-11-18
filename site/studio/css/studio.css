@@ -283,6 +283,12 @@ body.baking #toast { bottom: 11rem; }
 .ma-mini { border-top: 1px solid var(--line); padding-top: .5rem; flex: none; }
 .ma-mini[hidden] { display: none; }
 .c-chat .chat-list { margin: 0; }
+.c-chat { position: relative; }
+.c-hearts { position: absolute; right: 1rem; bottom: 3.6rem; width: 60px; height: 0; pointer-events: none; }
+.c-heart { position: absolute; bottom: 0; color: var(--rec); animation: cheart 1.8s ease-out forwards; }
+.c-heart svg { fill: currentColor; stroke: currentColor; }
+@keyframes cheart { 0% { transform: translate(0, 0) scale(.7); opacity: 0; } 15% { opacity: 1; } 100% { transform: translate(-14px, -150px) scale(1.15); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .c-heart { display: none; } }
 .req-list { overflow-y: auto; flex: 1; min-height: 0; }
 .req-list[hidden], .chat-list[hidden] { display: none; }
 .cline.sys { color: var(--muted); font-size: .85rem; }

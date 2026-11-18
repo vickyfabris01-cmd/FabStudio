@@ -17,6 +17,7 @@ const fresh = () => ({
   chat: [], watching: null, peak: 0, pulses: { love: 0, like: 0 },
   baseSeq: null, views: 0, love: 0,                 // this live's views (new ones only) and Love taps
   events: [], seq: 0,                // lines only the host sees (joined, love bursts); seq numbers every feed line
+  lovePulse: { n: 0, k: 0 },         // k goes up on every real Love message, so the chat pane can float hearts (n = taps in it)
   show: { title: false, poem: '', playing: '' },   // what viewers may see (the room enforces show-title)
   markers: [],                       // { t seconds into the recording, label, kind }
   phase: 'idle',                     // idle | ready (soundcard open) | starting | live | ended
@@ -129,6 +130,7 @@ class LiveEngine extends EventTarget {
   noteLove(m) {
     const s = this.s;
     s.love = Math.max(s.love + (m.n || 0), typeof m.all === 'number' ? m.all : 0);
+    s.lovePulse = { n: Math.max(1, m.n || 1), k: (s.lovePulse?.k || 0) + 1 };
     const last = s.events[s.events.length - 1];
     if (last && last.kind === 'love' && last.uid8 === m.uid8 && Date.now() - last.at < 2500) {
       s.events = [...s.events.slice(0, -1), { ...last, total: m.total, at: Date.now() }];
