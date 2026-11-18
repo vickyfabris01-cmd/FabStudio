@@ -1,4 +1,5 @@
-// The console header, one slim row: back to Lives, title, ON AIR, clock, status, Timestamp, End live, viewer link, gear.
+// The console header, one slim row: back to Lives, the Poem | Music control (slot), ON AIR, clock, status, Timestamp,
+// End live, viewer link, gear. The live title is an input too, but it is shown in the app's top bar (live.js puts it there).
 import { h, fmtDur, toast, gearIcon, linkIcon } from '../ui.js';
 
 const clock = (s) => { s = Math.max(0, Math.floor(s)); const m = Math.floor(s / 60); return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
@@ -8,7 +9,7 @@ export async function copyLink(itemId) {
   try { await navigator.clipboard.writeText(link); toast('Link copied.'); } catch { prompt('Viewer link', link); }
 }
 
-export function consoleHeader({ engine, nav, itemId, openSettings }) {
+export function consoleHeader({ engine, nav, itemId, openSettings, slot }) {
   const titleIn = h('input', { class: 'inline c-title', value: engine.s.row.title, maxlength: 120, 'aria-label': 'Title viewers see' });
   titleIn.onchange = () => engine.saveTitle(titleIn.value).catch((e) => toast(e.message));
   const status = h('span', { class: 'badge' });
@@ -24,7 +25,7 @@ export function consoleHeader({ engine, nav, itemId, openSettings }) {
   const el = h('div', { class: 'card c-head' },
     h('div', { class: 'row c-headrow' },
       h('button', { class: 'btn small', type: 'button', onclick: () => nav.liveList() }, '‹ Lives'),
-      h('div', { class: 'grow' }, titleIn), status, timer, info, retry, mark, end, link, gear));
+      h('div', { class: 'grow' }, slot), status, timer, info, retry, mark, end, link, gear));
 
   function paint() {
     const st = engine.s;
@@ -39,5 +40,5 @@ export function consoleHeader({ engine, nav, itemId, openSettings }) {
     info.textContent = [rec, conn].filter(Boolean).join('  ·  ');
     if (document.activeElement !== titleIn) titleIn.value = st.row.title;
   }
-  return { el, paint };
+  return { el, paint, titleEl: titleIn };
 }

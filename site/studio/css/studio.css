@@ -343,3 +343,23 @@ body.baking #toast { bottom: 11rem; }
   .console:not(.ended) .c-soundrow { flex-wrap: nowrap; gap: .5rem .8rem; }
   .console:not(.ended) .c-sel { min-width: 0; }
 }
+
+/* ---------- Live console: title in the top bar, Poem | Music source control, one play row ---------- */
+.bar-title { flex: 0 1 380px; min-width: 0; margin: 0 auto; min-height: 36px; padding: .2rem .6rem; text-align: center; font-family: var(--serif); font-size: 1.05rem; background: transparent; border: 1px solid transparent; }
+.bar-title:hover, .bar-title:focus { background: var(--surface); border-color: var(--line); }
+.src { position: relative; display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.src[hidden] { display: none; }
+.src-mode { width: auto; flex: none; min-height: 36px; padding: .25rem .5rem; font-weight: 600; }
+.src-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: .6rem; min-height: 36px; padding: .2rem .7rem; text-align: left; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.src-name:hover { border-color: var(--muted); }
+.src-main { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--serif); font-size: 1.02rem; }
+.src-main.unset { color: var(--muted); font-family: var(--sans); font-size: .9rem; }
+.src-sub { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: .85rem; }
+.src-caret { flex: none; margin-left: auto; color: var(--muted); }
+.src-pop { position: absolute; left: 0; top: calc(100% + .35rem); z-index: 30; width: min(520px, calc(100vw - 2rem)); max-height: min(65vh, 460px); display: flex; flex-direction: column; gap: .4rem; padding: .5rem; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.src-pop[hidden] { display: none; }
+.src-pop .ma-search[hidden] { display: none; }
+.src-list { overflow-y: auto; flex: 1; min-height: 0; }
+.c-voltxt { width: 2.6rem; flex: none; }
+.rd-time { min-width: 5.4rem; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rd-empty { margin: .2rem 0; }

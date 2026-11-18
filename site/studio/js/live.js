@@ -10,6 +10,7 @@ import { consoleHeader, copyLink, viewerLink } from './console/header.js';
 import { statCards } from './console/stats.js';
 import { readingPane } from './console/reading.js';
 import { chatPane } from './console/chatfeed.js';
+import { sourceControl } from './console/source.js';
 import { settingsList, openSettingsModal } from './console/settings-modal.js';
 import { recapPane } from './console/recap.js';
 import { uploadBlob, liveAssets } from './api.js';
@@ -106,7 +107,8 @@ export async function liveConsoleView(itemId, nav) {
   engine.sendPoems();
 
   const s = () => engine.s;
-  const header = consoleHeader({ engine, nav, itemId, openSettings: () => openSettingsModal() });
+  const src = sourceControl();   // Poem | Music, and the name area, in the header
+  const header = consoleHeader({ engine, nav, itemId, openSettings: () => openSettingsModal(), slot: src.el });
   const stats = statCards(engine);
   const reading = await readingPane();
   const chat = chatPane(engine, stats.el);   // the counts live in the chat header
@@ -125,14 +127,17 @@ export async function liveConsoleView(itemId, nav) {
     h('div', { class: 'row c-sched-l' }, h('div', { class: 'grow' }, linkIn), h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(itemId) }, 'Copy')),
     go);
 
-  /* ----- sound strip: level, gain, input, output ----- */
+  /* ----- sound strip: level, gain, volume, input, output, show title ----- */
   const sel = h('select', { 'aria-label': 'Audio input' });
   const outSel = h('select', { 'aria-label': 'Audio output' });
   const meterFill = h('div', { class: 'meter-fill' });
   const gain = h('input', { type: 'range', min: 0, max: 2, step: 0.05, value: 1, 'aria-label': 'Input gain' });
   gain.oninput = () => engine.audio?.setGain(Number(gain.value));
-  const mon = h('input', { type: 'checkbox' });
-  mon.onchange = () => engine.audio?.setMonitor(mon.checked);
+  const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: deck.s.volume, 'aria-label': 'Volume of the poem tune and music' });
+  const volText = h('span', { class: 'small muted c-voltxt' }, '100%');
+  vol.oninput = () => deck.setVolume(Number(vol.value));
+  const titleOn = h('input', { type: 'checkbox', checked: !!engine.s.show.title });
+  titleOn.onchange = () => engine.setShow({ title: titleOn.checked });
   const audioMsg = h('p', { class: 'small error' });
   let localMsg = '';
   const test = h('button', { class: 'btn small', type: 'button' }, 'Open soundcard');
@@ -153,9 +158,10 @@ export async function liveConsoleView(itemId, nav) {
     h('div', { class: 'row c-soundrow' },
       h('span', { class: 'small muted' }, 'Level'), h('div', { class: 'meter c-meter' }, meterFill),
       h('span', { class: 'small muted' }, 'Gain'), h('div', { style: 'width:100px' }, gain),
+      h('span', { class: 'small muted' }, 'Vol'), h('div', { style: 'width:100px' }, vol), volText,
       h('span', { class: 'small muted' }, 'In'), h('div', { class: 'c-sel' }, sel), test,
       h('span', { class: 'small muted' }, 'Out'), h('div', { class: 'c-sel' }, outSel),
-      h('label', { class: 'row small', title: 'Hear what viewers hear. Use headphones, or it will echo.' }, mon, h('span', {}, 'Monitor'))),
+      h('label', { class: 'row small', title: 'Viewers see the poem title while this is on' }, titleOn, h('span', {}, 'Show title'))),
     audioMsg);
   const onDevices = () => loadInputs();
   navigator.mediaDevices?.addEventListener?.('devicechange', onDevices);
@@ -201,6 +207,10 @@ export async function liveConsoleView(itemId, nav) {
     meterFill.style.width = `${Math.round(st.level * 100)}%`;
     meterFill.classList.toggle('hot', st.level > 0.92);
     sound.hidden = ended;
+    src.el.hidden = ended;
+    if (document.activeElement !== vol) vol.value = deck.s.volume;
+    volText.textContent = `${Math.round(deck.s.volume * 100)}%`;
+    if (document.activeElement !== titleOn) titleOn.checked = !!st.show.title;
     test.hidden = !!engine.audio;
     audioMsg.textContent = localMsg || st.error;
     reading.el.hidden = ended;
@@ -212,9 +222,13 @@ export async function liveConsoleView(itemId, nav) {
   const off = engine.on(paint);
   const offDeck = deck.on(paint);
   const tick = setInterval(paint, 1000);
-  root._dispose = () => { off(); offDeck(); clearInterval(tick); reading.dispose(); recap?.dispose(); navigator.mediaDevices?.removeEventListener?.('devicechange', onDevices); };
+  root._dispose = () => { off(); offDeck(); clearInterval(tick); reading.dispose(); src.dispose(); header.titleEl.remove(); recap?.dispose(); navigator.mediaDevices?.removeEventListener?.('devicechange', onDevices); };
   await loadInputs();
   paint();
+  // The live title is shown in the app's top bar, between the name and the Synced pill, and is editable there.
+  const topBar = document.querySelector('.bar');
+  header.titleEl.classList.add('bar-title');
+  if (topBar) topBar.insertBefore(header.titleEl, topBar.querySelector('.pill'));
   return root;
 }
 
