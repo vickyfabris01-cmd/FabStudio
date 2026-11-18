@@ -8,12 +8,17 @@ import { DEFAULT_SETTINGS, cleanSettings } from '../../shared/live-settings.js';
 import { getToken } from './auth.js';
 import { LiveAudio, startLiveRecording } from './live-audio.js';
 import { syncSoon } from './sync.js';
+import { db } from './db.js';
 
 const fresh = () => ({
   itemId: null, row: null,           // the live_sessions row (settings, starts_at, ...) and its item title
   conn: 'closed',                    // room connection: connecting | open | reconnecting | closed
   room: null,                        // last 'state' message from the room
   chat: [], watching: null, peak: 0, pulses: { love: 0, like: 0 },
+  baseSeq: null, views: 0, love: 0,                 // this live's views (new ones only) and Love taps
+  events: [], seq: 0,                // lines only the host sees (joined, love bursts); seq numbers every feed line
+  show: { title: false, poem: '', playing: '' },   // what viewers may see (the room enforces show-title)
+  markers: [],                       // { t seconds into the recording, label, kind }
   phase: 'idle',                     // idle | ready (soundcard open) | starting | live | ended
   audioState: '',                    // '' | connecting | ok | lost
   level: 0, error: '', captureId: null, recSeconds: 0,
@@ -41,7 +46,9 @@ class LiveEngine extends EventTarget {
     const { data: row } = await sb.from('live_sessions').select('*').eq('item_id', itemId).single();
     if (!item || !row) throw new Error('This live was not found.');
     const settings = cleanSettings(row.settings, DEFAULT_SETTINGS);
-    this.s = { ...fresh(), itemId, row: { ...row, settings, title: item.title, description: item.description }, phase: row.state === 'ended' ? 'ended' : 'idle', captureId: row.capture_id };
+    this.s = { ...fresh(), itemId, row: { ...row, settings, title: item.title, description: item.description }, phase: row.state === 'ended' ? 'ended' : 'idle', captureId: row.capture_id, markers: Array.isArray(row.markers) ? row.markers : [] };
+    this.seenReq = new Set();
+    this.loadCounts(itemId);
     this.room = connectRoom({
       item: itemId, getToken, console: true,
       onStatus: (c) => { this.set({ conn: c }); if (c === 'open') this.onOpen(); },
@@ -64,6 +71,8 @@ class LiveEngine extends EventTarget {
     if (!row || this.s.phase === 'ended') return;
     this.room.send({ t: 'settings', settings: row.settings });
     this.room.send({ t: 'title', text: row.title });
+    this.sendPoems();
+    this.sendShow();
     if (this.pub && this.s.phase === 'live') this.room.send({ t: 'broadcaster', sessionId: this.pub.sessionId, trackName: this.pub.trackName });
   }
 
@@ -75,13 +84,23 @@ class LiveEngine extends EventTarget {
         if (m.ownerSettings && s.row) s.row.settings = m.ownerSettings;
         if (typeof m.watching === 'number') s.watching = m.watching;
         if (typeof m.peak === 'number') s.peak = Math.max(s.peak, m.peak);
+        if (typeof m.loveTotal === 'number') s.love = Math.max(s.love, m.loveTotal);
+        this.noteRequests(m.requests);
         if (m.status === 'ended' && s.phase !== 'ended') this.finish();
         break;
-      case 'history': s.chat = m.chat || []; break;
-      case 'chat': s.chat = [...s.chat, m.msg].slice(-300); break;
+      case 'history': {
+        const old = new Map(s.chat.map((c) => [c.id, c.seq]));
+        s.chat = (m.chat || []).map((c) => { if (!c.seq) c.seq = old.get(c.id) || ++s.seq; return c; });
+        if (s.baseSeq == null) s.baseSeq = s.seq;   // what was already there when the console opened is not "unread"
+        break;
+      }
+      case 'chat': s.chat = [...s.chat, this.numbered(m.msg)].slice(-300); break;
       case 'chatDel': s.chat = s.chat.filter((c) => c.id !== m.id); break;
       case 'count': s.watching = m.watching; if (typeof m.peak === 'number') s.peak = m.peak; break;
       case 'react': s.pulses = { love: s.pulses.love + (m.love || 0), like: s.pulses.like + (m.like || 0) }; break;
+      case 'love': this.noteLove(m); break;
+      case 'joined': this.pushEvent({ kind: 'joined', name: m.name, uid8: m.uid8 }); break;
+      case 'view': s.views += 1; break;
       case 'taken':
         // Another console took over the broadcast: stop sending here, keep the recording.
         this.dropAudioOnly();
@@ -94,6 +113,91 @@ class LiveEngine extends EventTarget {
       default: break;
     }
     this.emit();
+  }
+
+
+  /* ---------- feed lines, counters, poems, show, markers ---------- */
+  // Every line the host's feed shows (chat, requests, joined, love) gets an increasing number, so the unread badges can count.
+  numbered(c) { if (!c.seq) c.seq = ++this.s.seq; return c; }
+
+  pushEvent(e) {
+    const s = this.s;
+    s.events = [...s.events, { ...e, at: Date.now(), seq: ++s.seq }].slice(-200);
+  }
+
+  // Bursts of Love from one person within a moment become one line with the running total.
+  noteLove(m) {
+    const s = this.s;
+    s.love = Math.max(s.love + (m.n || 0), typeof m.all === 'number' ? m.all : 0);
+    const last = s.events[s.events.length - 1];
+    if (last && last.kind === 'love' && last.uid8 === m.uid8 && Date.now() - last.at < 2500) {
+      s.events = [...s.events.slice(0, -1), { ...last, total: m.total, at: Date.now() }];
+    } else this.pushEvent({ kind: 'love', name: m.name, uid8: m.uid8, total: m.total });
+  }
+
+  // A request seen for the first time gets a place in the feed (its later status changes only touch the Requests tab).
+  noteRequests(list) {
+    const s = this.s;
+    if (!Array.isArray(list)) return;
+    if (!this.seenReq) this.seenReq = new Set();
+    for (const r of list) {
+      if (this.seenReq.has(r.id)) continue;
+      this.seenReq.add(r.id);
+      s.events = [...s.events, { kind: 'request', id: r.id, name: r.name, uid8: String(r.uid || '').slice(0, 4), text: r.text, at: r.at || Date.now(), seq: ++s.seq }].slice(-200);
+    }
+  }
+
+  // The views, Like and Love shown for this live start from what the database already has.
+  async loadCounts(itemId) {
+    try {
+      const { data } = await sb.from('live_public').select('n_views,n_like').eq('id', itemId).maybeSingle();
+      if (data && this.s.itemId === itemId) { this.s.views = Math.max(this.s.views, data.n_views || 0); this.s.pulses.like = Math.max(this.s.pulses.like, data.n_like || 0); this.emit(); }
+    } catch { /* the counts then start from zero */ }
+  }
+
+  // Titles of poems with more than 5 stanzas, for the viewers' Request list. Titles only, never text.
+  async sendPoems() {
+    try {
+      const rows = (await db.poems.toArray()).filter((p) => !p.deletedAt && (p.stanzas?.length || 0) > 5 && (p.title || '').trim());
+      rows.sort((a, b) => a.title.localeCompare(b.title));
+      this.send({ t: 'poems', titles: rows.map((p) => p.title.trim().slice(0, 60)).slice(0, 40) });
+    } catch { /* the list stays as it was */ }
+  }
+
+  // What viewers may see. The room shows it to them only while the title switch is on.
+  setShow(patch) {
+    this.s.show = { ...this.s.show, ...patch };
+    this.sendShow();
+    this.emit();
+  }
+  sendShow() { const { title, poem, playing } = this.s.show; this.send({ t: 'show', title: !!title, poem, playing }); }
+
+  // How loud the recording is, twice a second. Saved on this laptop for the recap's waveform (every minute, and at the end).
+  collectPeak(level) {
+    this.peakMax = Math.max(this.peakMax || 0, level);
+    this.peakTick = (this.peakTick || 0) + 1;
+    if (this.peakTick % 5) return;
+    (this.peaks ||= []).push(Math.round(this.peakMax * 100));
+    this.peakMax = 0;
+    if (this.peaks.length % 120 === 0 && this.s.captureId) this.savePeaks(this.s.captureId);
+  }
+  async savePeaks(id) { try { await db.meta.put({ key: `peaks:${id}`, value: this.peaks || [] }); } catch { /* the recap then draws a rougher waveform */ } }
+
+  // The recap edits the whole list of markers at once.
+  async setMarkers(list) {
+    const s = this.s;
+    s.markers = [...list].sort((a, b) => a.t - b.t).slice(0, 300).map((m) => ({ t: Math.max(0, Math.round(m.t)), label: String(m.label || '').slice(0, 80), kind: m.kind === 'poem' ? 'poem' : 'dead moment' }));
+    this.emit();
+    await sb.from('live_sessions').update({ markers: s.markers }).eq('item_id', s.itemId);
+  }
+
+  // A marker is a point in the recording (seconds from its start). Only while the recording runs.
+  async addMarker({ label, kind = 'dead moment' }) {
+    const s = this.s;
+    if (s.phase !== 'live' || !this.rec) return;
+    s.markers = [...s.markers, { t: Math.round(this.rec.seconds()), label: String(label || '').slice(0, 80), kind }];
+    this.emit();
+    await sb.from('live_sessions').update({ markers: s.markers }).eq('item_id', s.itemId);
   }
 
   send(obj) { return this.room?.send(obj) ?? false; }
@@ -123,7 +227,11 @@ class LiveEngine extends EventTarget {
     await a.start({ deviceId });
     a.onLost = () => { if (this.s.phase === 'live') this.set({ error: 'The audio input was lost. Plug it back in, then press Retry audio.' , audioState: 'lost' }); };
     this.audio = a;
-    this.meter = setInterval(() => { this.s.level = a.level(); if (this.rec) this.s.recSeconds = this.rec.seconds(); this.emit(); }, 100);
+    this.meter = setInterval(() => {
+      this.s.level = a.level();
+      if (this.rec) { this.s.recSeconds = this.rec.seconds(); this.collectPeak(this.s.level); }
+      this.emit();
+    }, 100);
     if (this.s.phase === 'idle') this.s.phase = 'ready';
     this.emit();
     return a;
@@ -148,6 +256,7 @@ class LiveEngine extends EventTarget {
     try {
       const a = await this.prepare();
       this.rec = await startLiveRecording(a.stream);
+      this.peaks = []; this.peakMax = 0; this.peakTick = 0;
       s.captureId = this.rec.id;
       await this.publish(false);
       this.set({ phase: 'live', audioState: 'ok' });
@@ -229,7 +338,7 @@ class LiveEngine extends EventTarget {
     try { this.pub?.close(); } catch { /* closed */ }
     this.pub = null;
     let id = s.captureId;
-    if (this.rec) { try { id = await this.rec.stop(); } catch (e) { s.error = friendly(e); } this.rec = null; }
+    if (this.rec) { try { id = await this.rec.stop(); } catch (e) { s.error = friendly(e); } this.rec = null; if (id) await this.savePeaks(id); }
     await this.stopAudio();
     s.phase = 'ended'; s.captureId = id; s.audioState = '';
     if (id) {

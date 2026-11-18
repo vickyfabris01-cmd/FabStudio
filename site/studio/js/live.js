@@ -106,24 +106,20 @@ export async function liveConsoleView(itemId, nav) {
   engine.sendPoems();
 
   const s = () => engine.s;
-  const header = consoleHeader({ engine, nav, itemId, openSettings: () => openSettingsModal() });
-  const stats = statCards(engine);
-  const reading = await readingPane();
-  const chat = chatPane(engine, stats.el);   // the counts live in the chat header
+  const els = {};
+  let inputs = [];
+  let lastChatN = -1; let lastReqKey = ''; let lastSetKey = '';
 
-  /* ----- scheduled card: shown until the live is on air ----- */
-  const when = h('div', { class: 'muted' });
-  const linkIn = h('input', { readonly: true, value: viewerLink(itemId), 'aria-label': 'Viewer link' });
-  const go = h('button', { class: 'btn primary big', type: 'button' }, 'Go live');
-  go.onclick = async () => {
-    go.disabled = true;
-    try { await engine.goLive(); } catch (e) { toast(e.message || 'Could not go live'); }
-    go.disabled = false;
-  };
-  const sched = h('section', { class: 'card c-sched' },
-    h('div', { class: 'c-sched-t' }, h('b', {}, 'Ready when you are'), when, h('div', { class: 'small muted' }, 'Goes straight on air. It never starts by itself.')),
-    h('div', { class: 'row c-sched-l' }, h('div', { class: 'grow' }, linkIn), h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(itemId) }, 'Copy')),
-    go);
+  /* header */
+  const titleIn = h('input', { class: 'inline', value: s().row.title, maxlength: 120, 'aria-label': 'Title viewers see' });
+  titleIn.onchange = () => engine.saveTitle(titleIn.value).catch((e) => toast(e.message));
+  els.status = h('span', { class: 'badge' }); els.timer = h('b', {}); els.watch = h('span', { class: 'muted small' }); els.conn = h('span', { class: 'small muted' });
+  const link = `${SITE()}/live/?id=${itemId}`;
+  const head = h('div', { class: 'c-head' },
+    h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.liveList() }, '‹ Lives'), h('span', { class: 'grow' }), els.status, els.timer),
+    h('div', { class: 'row', style: 'margin-top:.5rem' }, titleIn),
+    h('div', { class: 'row small', style: 'margin-top:.4rem' }, els.watch, h('span', { class: 'grow' }), els.conn,
+      h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(link); toast('Link copied.'); } catch { prompt('Viewer link', link); } } }, 'Copy viewer link')));
 
   /* ----- sound strip: level, gain, input, output ----- */
   const sel = h('select', { 'aria-label': 'Audio input' });
@@ -160,44 +156,49 @@ export async function liveConsoleView(itemId, nav) {
   const onDevices = () => loadInputs();
   navigator.mediaDevices?.addEventListener?.('devicechange', onDevices);
 
-  /* ----- after the session: the recap ----- */
-  const afterBox = h('div', { class: 'c-after', hidden: true });
-  let recap = null; let recapBusy = false;
-  const paintAfter = async () => {
-    afterBox.hidden = false;
-    if (recap) return recap.paint();
-    if (recapBusy) return;
-    recapBusy = true;
-    try {
-      const st = s();
-      const cap = st.captureId ? await db.captures.get(st.captureId) : null;
-      recap = await recapPane({
-        engine, itemId, cap, title: st.row.title,
-        published: async () => { const { data: item } = await sb.from('published_items').select('public_media_key').eq('id', itemId).single(); return !!item?.public_media_key; },
-        publishWhole: (c) => publishReplay(itemId, c, s().row.title),
-      });
-      afterBox.replaceChildren(recap.el);
-      recap.paint();
-    } catch (e) { afterBox.replaceChildren(h('p', { class: 'error' }, 'Could not open the recap: ' + (e.message || e))); }
-    recapBusy = false;
-  };
+  /* after the session */
+  const afterBox = h('section', { class: 'card c-after', hidden: true });
 
-  root.append(header.el, sched, sound, h('div', { class: 'c-split' }, reading.el, afterBox, chat.el));
+  root.append(head, h('div', { class: 'c-grid' }, h('div', { class: 'c-col' }, audioCard, reqCard, setCard, afterBox), h('div', { class: 'c-col' }, chatCard)));
+
+  /* ----- painting ----- */
+  const chatLine = (c) => {
+    const who = c.host ? h('b', { class: 'host' }, c.name) : h('b', {}, c.name, h('span', { class: 'muted' }, ` ·${c.uid8}`));
+    const menu = h('span', { class: 'cmenu' },
+      h('button', { class: 'lnk', type: 'button', title: 'Pin', onclick: () => engine.send({ t: 'pin', msgId: c.id }) }, 'pin'),
+      h('button', { class: 'lnk', type: 'button', title: 'Mute this person', onclick: () => engine.send({ t: 'mute', uid: c.uid8, on: true }) }, 'mute'),
+      h('button', { class: 'lnk', type: 'button', title: 'Delete', onclick: () => engine.send({ t: 'delchat', id: c.id }) }, 'delete'));
+    return h('div', { class: 'cline' }, who, ' ', h('span', {}, c.text), menu);
+  };
+  const reqLine = (r) => {
+    const act = (a, l) => h('button', { class: 'btn small', type: 'button', onclick: () => engine.send({ t: 'req', id: r.id, action: a }) }, l);
+    return h('div', { class: 'rline' + (r.status === 'reading' ? ' now' : '') + (r.status === 'done' ? ' done' : '') },
+      h('div', { class: 'grow' }, h('span', { class: 'badge' }, 'poem'), ' ', h('span', {}, r.text), h('div', { class: 'small muted' }, `${r.name} ·${(r.uid || '').slice(0, 4)}`)),
+      r.status === 'reading' ? act('done', 'Done') : [act('reading', 'Reading'), r.status === 'done' ? act('queue', 'Requeue') : act('up', '↑')], act('dismiss', '✕'));
+  };
+  const field = (f) => {
+    const v = s().row.settings[f.key];
+    let input;
+    if (f.type === 'bool') { input = h('input', { type: 'checkbox', checked: !!v }); input.onchange = () => engine.saveSettings({ [f.key]: input.checked }); }
+    else if (f.type === 'choice') {
+      input = h('select', {}, f.options.map(([val, l]) => h('option', { value: val, selected: String(val) === String(v) }, l)));
+      input.onchange = () => engine.saveSettings({ [f.key]: f.number ? Number(input.value) : input.value });
+    } else {
+      input = h('input', { type: f.type === 'int' ? 'number' : 'text', value: v, min: f.min, max: f.max, class: 'inline' });
+      input.onchange = () => engine.saveSettings({ [f.key]: f.type === 'int' ? Number(input.value) : input.value });
+    }
+    return h('label', { class: 'sfield' + (f.type === 'bool' ? ' row check' : '') }, f.type === 'bool' ? [input, h('span', {}, f.label)] : [h('span', {}, f.label + (f.unit ? ` (${f.unit})` : '')), input], f.hint ? h('div', { class: 'small muted' }, f.hint) : null);
+  };
 
   const paint = () => {
     const st = s();
     const ended = st.phase === 'ended';
-    const pre = !ended && st.phase !== 'live';
-    root.classList.toggle('ended', ended);   // on one screen without scrolling, except for the recap
-    header.paint();
-    stats.el.hidden = pre;
-    stats.paint();
-    sched.hidden = !pre;
-    if (pre) {
-      const at = st.row.starts_at;
-      when.textContent = at ? `Planned start ${new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'No start time set. Press Go live whenever you are ready.';
-      go.disabled = st.conn !== 'open' || st.phase === 'starting';
-    }
+    els.status.textContent = live ? '● ON AIR' : ended ? 'Ended' : st.phase === 'starting' ? 'Starting…' : 'Not on air';
+    els.status.className = 'badge' + (live ? ' onair' : '');
+    els.timer.textContent = live && st.room?.startedAt ? mmss((Date.now() - st.room.startedAt) / 1000) : '';
+    const shown = st.watching == null ? '–' : st.watching;
+    els.watch.textContent = `Watching: ${shown}${st.peak ? ` · peak ${st.peak}` : ''} · Love ${st.pulses.love} · Like ${st.pulses.like}`;
+    els.conn.textContent = { open: 'Room connected', connecting: 'Connecting…', reconnecting: 'Reconnecting…', closed: '' }[st.conn] || '';
     meterFill.style.width = `${Math.round(st.level * 100)}%`;
     meterFill.classList.toggle('hot', st.level > 0.92);
     sound.hidden = ended;

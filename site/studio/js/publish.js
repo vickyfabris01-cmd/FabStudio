@@ -94,6 +94,16 @@ export async function createDraftFromFile(kind, file) {
   return id;
 }
 
+// A clip cut from a live recording becomes an ordinary audio item (own title, thumbnail and counters).
+// liveId remembers which live it came from, so the recap can list its clips. It stays on this device.
+export async function createDraftFromClip({ liveId, title, blob, duration }) {
+  const thumb = await thumbFromTitle(title);
+  const id = crypto.randomUUID();
+  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: blob.type || 'audio/webm', duration, blob, thumb }), liveId });
+  syncSoon();
+  return id;
+}
+
 // Publishing runs in the background (see publisher.js): this only puts the item in the queue.
 // The promise settles when the item is published or the job fails.
 export function publishItemNow(id, title = '') {
