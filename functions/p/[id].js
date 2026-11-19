@@ -25,7 +25,7 @@ export async function onRequestGet({ request, params, env }) {
 
   const title = item ? `${item.title} | Fabris Poet` : 'Fabris Poet';
   const description = item ? (String(item.description || '').replace(/\s+/g, ' ').trim().slice(0, 160) || 'A poem, read aloud.') : 'Poems, read aloud.';
-  const image = item?.public_thumb_key ? `${CONFIG.API_BASE}/public/${item.public_thumb_key}` : '';
+  const image = item?.public_thumb_key ? `${CONFIG.API_BASE}/public/${item.public_thumb_key}` : `${url.origin}/img/fabris-poet-share.png`;
   const page = `${url.origin}/p/${id}`;
   const tags = [
     `<title>${esc(title)}</title>`,

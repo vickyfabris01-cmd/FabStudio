@@ -72,7 +72,9 @@ function wrap(ctx, text, maxWidth, maxLines) {
   return lines;
 }
 
-// A simple designed card: the poem title on a dark background with the FabisPot signature.
+const loadImg = (src) => new Promise((resolve) => { const i = new Image(); i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = src; });
+
+// A simple designed card: the poem title on a dark background with the Fabris Poet mark.
 export async function thumbFromTitle(title, label = 'Fabris Poet') {
   const c = document.createElement('canvas');
   c.width = W;
@@ -93,9 +95,15 @@ export async function thumbFromTitle(title, label = 'Fabris Poet') {
   ctx.font = '600 84px Georgia, "Times New Roman", serif';
   ctx.textBaseline = 'top';
   wrap(ctx, title || 'Untitled', W - 220, 4).forEach((l, i) => ctx.fillText(l, 90, 290 + i * 100));
-  ctx.fillStyle = '#86c4ad';
-  ctx.font = '600 34px Georgia, serif';
-  ctx.fillText('FabisPot', 90, H - 100);
+  const mark = await loadImg('/studio/icons/mark.png');
+  if (mark) {
+    const mh = 96;
+    ctx.drawImage(mark, 90, H - 64 - mh, Math.round((mark.width * mh) / mark.height), mh);
+  } else {
+    ctx.fillStyle = '#86c4ad';
+    ctx.font = '600 34px Georgia, serif';
+    ctx.fillText('FabisPot', 90, H - 100);
+  }
   ctx.fillStyle = '#9a93a8';
   ctx.font = '30px system-ui, sans-serif';
   ctx.textAlign = 'right';

@@ -96,7 +96,7 @@ function renderLogin() {
       try { await auth.signIn(email.value.trim(), pw.value); await boot(); }
       catch (x) { err.textContent = x.message || 'Sign-in failed.'; btn.disabled = false; }
     },
-  }, h('h1', {}, 'FabStudio'), h('p', { class: 'muted' }, 'Owner sign-in. After the first time, the app opens without internet.'), email, pw, err, btn);
+  }, h('img', { class: 'login-mark', src: '/studio/icons/mark.png', alt: '', width: 72, height: 73 }), h('h1', {}, 'FabStudio'), h('p', { class: 'muted' }, 'Owner sign-in. After the first time, the app opens without internet.'), email, pw, err, btn);
   app.replaceChildren(h('div', { class: 'login-wrap' }, form));
 }
 
@@ -110,7 +110,7 @@ function renderShell() {
   homeBtn = h('button', { class: 'homebtn', type: 'button', hidden: true, onclick: () => goTab('home') }, '‹ Home');
   const tabs = [['studio', 'Studio'], ['poems', 'Poems'], ['live', 'Live'], ['settings', 'Settings']];
   app.replaceChildren(
-    h('header', { class: 'bar' }, h('span', { class: 'brand', onclick: () => { if (isLaptop()) goTab('home'); } }, 'FabStudio'), homeBtn, h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
+    h('header', { class: 'bar' }, h('span', { class: 'brand', onclick: () => { if (isLaptop()) goTab('home'); } }, h('img', { class: 'brand-mark', src: '/studio/icons/mark.png', alt: '', width: 28, height: 28 }), 'FabStudio'), homeBtn, h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
     h('main', { id: 'view' }),
     h('nav', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, 'aria-label': l, onclick: () => goTab(k) }, tabIcon(k), h('span', {}, l)))),
   );

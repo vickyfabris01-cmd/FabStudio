@@ -9,7 +9,9 @@
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 var(--sans); -webkit-text-size-adjust: 100%; }
 body { padding-top: env(safe-area-inset-top); }
 #app { min-height: 100dvh; display: flex; flex-direction: column; }
-.boot { margin: 40vh auto 0; color: var(--muted); }
+.boot { margin: 40vh auto 0; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: .8rem; }
+.boot p { margin: 0; }
+.boot-mark { width: 64px; height: auto; display: block; }
 h1, h2, h3 { font-family: var(--serif); font-weight: 600; margin: 0; }
 h2 { font-size: 1.5rem; }
 h3 { font-size: 1.05rem; margin-bottom: .6rem; }
@@ -21,7 +23,8 @@ p { margin: .4rem 0; }
 
 /* top bar + tabs */
 .bar { display: flex; align-items: center; justify-content: space-between; padding: .7rem 1rem; border-bottom: 1px solid var(--line); position: sticky; top: env(safe-area-inset-top); background: var(--bg); z-index: 5; }
-.brand { font-family: var(--serif); font-size: 1.2rem; letter-spacing: .01em; }
+.brand { display: inline-flex; align-items: center; gap: .5rem; font-family: var(--serif); font-size: 1.2rem; letter-spacing: .01em; }
+.brand-mark { height: 28px; width: auto; display: block; }
 .pill { font: inherit; font-size: .8rem; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem; }
 .pill[data-state='syncing'] { color: var(--accent); border-color: var(--accent); }
 .pill[data-state='error'], .pill[data-state='auth'] { color: var(--danger); border-color: var(--danger); }
@@ -81,6 +84,7 @@ input.inline, select.inline { min-height: 36px; padding: .3rem .6rem; background
 .login-wrap { flex: 1; display: grid; place-items: center; padding: 1.5rem; }
 .login { width: 100%; max-width: 360px; display: grid; gap: .8rem; }
 .login h1 { font-size: 2rem; }
+.login-mark { width: 72px; height: auto; justify-self: start; }
 
 /* toast */
 #toast { position: fixed; left: 50%; bottom: calc(5rem + env(safe-area-inset-bottom)); transform: translate(-50%, 10px); background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 10px; max-width: 90vw; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 20; }
