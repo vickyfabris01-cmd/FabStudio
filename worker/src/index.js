@@ -10,7 +10,7 @@ import { sfuConfigured, createSession, newTracks, renegotiate, SESSION_RE, TRACK
 export { LiveRoom };
 
 const KEY_RE = /^(captures|tunes|bakes|items|thumbs)\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/;
-const PUB_RE = /^pub\/[0-9a-f-]{36}\/(media|thumb)\.[a-z0-9]{2,5}$/;
+const PUB_RE = /^(pub\/[0-9a-f-]{36}\/(media|thumb)\.[a-z0-9]{2,5}|hero\/[1-7]-[0-9]{10,14}\.jpg)$/;   // posts, and the home page hero pictures
 const UUID_RE = /^[0-9a-f-]{36}$/;
 const MAX_PART = 10 * 1024 * 1024; // client sends 8 MB parts; allow headroom
 
@@ -352,6 +352,20 @@ export default {
         await deleteByPrefix(bucket, `items/${id}.`);
         await deleteByPrefix(bucket, `thumbs/${id}.`);
         return json({ ok: true }, cors);
+      }
+
+      // The home page hero pictures (7 slots). Each replacement gets a new file name so no cache shows the old one.
+      if (path === '/hero/put' && request.method === 'PUT') {
+        const slot = Number(url.searchParams.get('slot'));
+        if (!Number.isInteger(slot) || slot < 1 || slot > 7) throw new HttpError(400, 'Bad slot');
+        const buf = await request.arrayBuffer();
+        if (buf.byteLength === 0 || buf.byteLength > 3 * 1024 * 1024) throw new HttpError(413, 'Picture too big (3 MB at most)');
+        const key = `hero/${slot}-${Date.now()}.jpg`;
+        await env.PUBLIC_BUCKET.put(key, buf, { httpMetadata: { contentType: 'image/jpeg' } });
+        const page = await env.PUBLIC_BUCKET.list({ prefix: `hero/${slot}-` });
+        const old = page.objects.map((o) => o.key).filter((k) => k !== key);
+        if (old.length) await env.PUBLIC_BUCKET.delete(old);
+        return json({ ok: true, key }, cors);
       }
 
       throw new HttpError(404, 'Not found');

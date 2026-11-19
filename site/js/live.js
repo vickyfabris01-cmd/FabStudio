@@ -61,6 +61,21 @@ async function main() {
     h('div', { class: 'l-ctop-left' }, h('div', { class: 'l-row l-cardtop' }, badge, clockEl), playBtn),
     h('div', { class: 'l-ctop-right' }, watchEl, muteBtn));
   // the live title sits in the page header, centered; a long one slides instead of stretching the header
+  // One line that slides back and forth when it is too long for the card (the page repaints every second, so these
+  // elements are made once and only measured again when their text or width changes).
+  const slideLine = (cls) => {
+    const text = h('span', {});
+    const box = h('div', { class: `${cls} l-slide` }, text);
+    let now = null;
+    const fit = () => {
+      box.classList.remove('slide');
+      const over = text.scrollWidth - box.clientWidth;
+      if (over > 2) { box.style.setProperty('--d', over + 'px'); box.style.setProperty('--t', Math.max(6, (over / 25) * 2) + 's'); box.classList.add('slide'); }
+    };
+    if ('ResizeObserver' in window) new ResizeObserver(fit).observe(box);
+    return { el: box, set(t) { if (t === now) return; now = t; text.textContent = t; box.title = t; requestAnimationFrame(fit); } };
+  };
+  const poemLine = slideLine('l-poem'); const playLine = slideLine('l-play'); const thanksLine = slideLine('l-big');
   const titleBox = document.getElementById('liveTitle');
   const titleEl = document.getElementById('liveTitleText');
   let titleNow = null;
@@ -317,7 +332,8 @@ async function main() {
     stage.classList.toggle('is-live', live);
     if (blocked) over.replaceChildren();
     else if (ended) {
-      over.replaceChildren(h('p', { class: 'l-big' }, `Thank you for listening to ${S.room?.title || S.row.title}`), h('p', { class: 'l-meta' }, 'This live has ended. Join me for the next live.'));
+      thanksLine.set(`Thank you for listening to ${S.room?.title || S.row.title}`);
+      over.replaceChildren(thanksLine.el, h('p', { class: 'l-meta' }, 'This live has ended. Join me for the next live.'));
     } else if (!live) {
       const c = countdownText();
       over.replaceChildren(...[
@@ -327,8 +343,8 @@ async function main() {
         h('p', { class: 'l-meta' }, 'This page opens the live by itself.')].filter(Boolean));
     } else {
       const kids = [];
-      if (S.show.on && S.show.poem) kids.push(h('div', { class: 'l-poem' }, S.show.poem));
-      if (S.show.on && S.show.playing) kids.push(h('div', { class: 'l-play' }, `♪ Playing ${S.show.playing}`));
+      if (S.show.on && S.show.poem) { poemLine.set(S.show.poem); kids.push(poemLine.el); }
+      if (S.show.on && S.show.playing) { playLine.set(`♪ Playing ${S.show.playing}`); kids.push(playLine.el); }
       if (S.listening && S.blocked) kids.push(h('p', { class: 'l-meta' }, 'Tap play to listen.'));
       else if (S.listening) kids.push(bars, h('p', { class: 'l-meta' }, audioOn ? '' : 'The host\'s audio is reconnecting…'));
       else kids.push(h('p', { class: 'l-meta' }, S.stopped ? 'Paused. Tap play to listen.' : audioOn ? 'Connecting the audio…' : 'The audio will start in a moment.'));

@@ -51,6 +51,9 @@ class LiveEngine extends EventTarget {
     this.seenReq = new Set();
     this.helloed = false;
     this.loadCounts(itemId);
+    // Safety net: the counts are also read from the database every 15 seconds, in case a message was missed.
+    clearInterval(this.countsTimer);
+    this.countsTimer = setInterval(() => { if (navigator.onLine && this.s.itemId === itemId) this.loadCounts(itemId); }, 15000);
     this.room = connectRoom({
       item: itemId, getToken, console: true,
       onStatus: (c) => { if (c !== 'open') this.helloed = false; this.set({ conn: c }); },   // onOpen() now runs when the room's first 'state' arrives, i.e. after it has accepted our hello
@@ -61,6 +64,7 @@ class LiveEngine extends EventTarget {
 
   async close() {
     if (this.active) return;
+    clearInterval(this.countsTimer);
     this.room?.close(); this.room = null;
     await this.stopAudio();
     this.s = fresh();
@@ -104,6 +108,7 @@ class LiveEngine extends EventTarget {
       case 'love': this.noteLove(m); break;
       case 'joined': this.pushEvent({ kind: 'joined', name: m.name, uid8: m.uid8 }); break;
       case 'view': s.views += 1; break;
+      case 'views': if (typeof m.n === 'number') s.views = Math.max(s.views, m.n); break;   // the real total from the database
       case 'taken':
         // Another console took over the broadcast: stop sending here, keep the recording.
         this.dropAudioOnly();

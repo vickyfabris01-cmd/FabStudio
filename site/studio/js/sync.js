@@ -14,7 +14,7 @@ const T = {
   bakes:    { remote: 'bakes',           fields: ['id','poemId','captureId','tuneId','tuneVolume','mime','duration','r2Key','createdAt','updatedAt','deletedAt'] },
   // sourceLiveId is sent only when it has a value (a post made from a live recap), so every other item keeps working
   // even before migration 007 has been run.
-  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'], optional: ['sourceLiveId'] },
+  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'], optional: ['sourceLiveId', 'thumbKind'] },
 };
 // Files that belong to each row: which field holds the file, its R2 key, and its "still to upload" flag.
 const FILE = { blob: 'blob', key: 'r2Key', pending: 'blobPending' };
@@ -38,6 +38,8 @@ const fromRemote = (r, fields, optional = []) => ({
   ...Object.fromEntries(fields.map((f) => [f, r[snake(f)] ?? null])),
   ...Object.fromEntries(optional.filter((f) => r[snake(f)] != null).map((f) => [f, r[snake(f)]])),
 });
+// Columns added by later migrations (source_live_id, thumb_kind). If one is not there yet, the row is sent without them.
+const NEW_COLUMN = /source_live_id|thumb_kind/;
 
 let running = false;
 let timer = null;
@@ -104,7 +106,11 @@ async function pushTable(name) {
       }
       step = 'save row to Supabase';
       const fresh = await table.get(r.id);
-      const { error } = await sb.from(cfg.remote).upsert(toRemote(fresh, cfg.fields, cfg.optional), { onConflict: 'id' });
+      let { error } = await sb.from(cfg.remote).upsert(toRemote(fresh, cfg.fields, cfg.optional), { onConflict: 'id' });
+      // Before migration 008 there is no thumb_kind column: send the row without the newer columns instead of failing.
+      if (error && cfg.optional && NEW_COLUMN.test(error.message || '')) {
+        ({ error } = await sb.from(cfg.remote).upsert(toRemote(fresh, cfg.fields, []), { onConflict: 'id' }));
+      }
       if (error) throw error;
       // Clear the flag only if the row was not edited while we were uploading.
       await table.where('id').equals(r.id).and((x) => x.updatedAt === fresh.updatedAt)

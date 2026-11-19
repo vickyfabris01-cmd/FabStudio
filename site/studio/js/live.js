@@ -2,7 +2,9 @@
 import { sb } from '../../shared/supabase.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../../shared/live-settings.js';
 import { db, uid, now } from './db.js';
-import { h, fmtDur, fmtAgo, toast, openModal, eyeIcon, loveIcon, commentIcon } from './ui.js';
+import { h, fmtDur, fmtAgo, toast, openModal, popMenu, dotsIcon, eyeIcon, loveIcon, commentIcon } from './ui.js';
+import { deleteItemFiles } from './api.js';
+import { createSelection, selectBar, tickBox } from './select.js';
 import { engine } from './live-engine.js';
 import { listInputs } from './live-audio.js';
 import { deck, listOutputs, canChooseOutput } from './console/deck.js';
@@ -13,7 +15,7 @@ import { chatPane } from './console/chatfeed.js';
 import { sourceControl } from './console/source.js';
 import { settingsList, openSettingsModal } from './console/settings-modal.js';
 import { recapPane } from './console/recap.js';
-import { syncAndWait } from './sync.js';
+import { syncAndWait, syncSoon } from './sync.js';
 
 const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
 const toLocalInput = (iso) => { if (!iso) return ''; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
@@ -67,6 +69,37 @@ export function liveStats({ views, peak, love, chats }) {
   if (chats != null) bits.push(h('span', { title: 'Chat messages' }, commentIcon(14), h('b', {}, String(chats))));
   return bits.length ? h('div', { class: 'stats live-stats' }, bits) : null;
 }
+const pickedLives = createSelection();   // Select mode of the Live list
+
+// Deletes lives for good: the public page, the chat, Love and viewer log (they go with the item), the files, and the
+// recording. Posts that were made from a recap are separate posts and stay.
+async function deleteLivesFlow(rows) {
+  const todo = rows.filter((r) => r.state !== 'live');
+  if (!todo.length) { toast('A live that is on air cannot be deleted. End it first.'); return false; }
+  if (!navigator.onLine) throw new Error('This needs internet.');
+  const n = todo.length;
+  if (!confirm(`Delete ${n === 1 ? 'this live' : `${n} lives`} completely?\nThe chat, viewer list, public page and the recording are removed for good. Posts you made from a recap stay.`)) return false;
+  let done = 0;
+  for (const r of todo) {
+    try {
+      await deleteItemFiles(r.item_id);
+      const { error } = await sb.from('published_items').delete().eq('id', r.item_id);   // takes the live, its chat, Love and viewer log with it
+      if (error) throw error;
+      if (r.capture_id) {
+        // the recording is removed from online storage by the next sync, like any deleted recording
+        await db.captures.where('id').equals(r.capture_id).modify((c) => { c.deletedAt = now(); c.updatedAt = now(); c.dirty = 1; c.blobPending = 0; delete c.blob; });
+        await db.meta.delete(`peaks:${r.capture_id}`);
+      }
+      await db.items.delete(r.item_id);
+      if (engine.s.itemId === r.item_id && !engine.active) await engine.close();
+      done++;
+    } catch (e) { toast(`Could not delete a live: ${e.message || e}`); }
+  }
+  if (done) syncSoon(500);
+  toast(`${done} live${done === 1 ? '' : 's'} deleted.`);
+  return done > 0;
+}
+
 export async function liveListView(nav) {
   const wrap = h('div', { class: 'live-list' });
   wrap.append(h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Live'), h('button', { class: 'btn primary', type: 'button', onclick: () => newLiveModal(nav) }, 'New live')));
@@ -89,13 +122,42 @@ export async function liveListView(nav) {
       const totals = new Map(tot.map((t) => [t.item_id, t]));
       body.replaceChildren();
       if (!rows?.length) body.append(h('p', { class: 'muted' }, 'No lives yet. Create one, then open it on your laptop to go live.'));
+      const selBar = selectBar(pickedLives, {
+        onMode: () => nav.refresh(),
+        onDelete: async () => {
+          const chosen = (rows || []).filter((r) => pickedLives.ids.has(r.item_id));
+          try { if (await deleteLivesFlow(chosen)) { pickedLives.on = false; pickedLives.ids.clear(); nav.refresh(); } } catch (e) { toast(e.message || String(e)); }
+        },
+      });
+      if (rows?.length) wrap.insertBefore(selBar.el, body);
       for (const r of rows || []) {
         const it = by.get(r.item_id) || {};
         const label = r.state === 'live' ? 'On air' : r.state === 'ended' ? (it.public_media_key ? 'Replay published' : 'Ended') : r.starts_at ? `Planned ${new Date(r.starts_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : 'Not started';
-        body.append(h('button', { class: 'live-row', type: 'button', onclick: () => nav.openLive(r.item_id) },
+        const onAir = r.state === 'live';
+        const box = pickedLives.on && !onAir ? tickBox(pickedLives.ids.has(r.item_id)) : null;
+        const card = h('div', { class: 'live-card' + (pickedLives.on && pickedLives.ids.has(r.item_id) ? ' picked' : '') });
+        const main = h('button', { class: 'live-row', type: 'button', onclick: () => {
+          if (!pickedLives.on) return nav.openLive(r.item_id);
+          if (onAir) return toast('A live on air cannot be deleted.');
+          if (pickedLives.ids.has(r.item_id)) pickedLives.ids.delete(r.item_id); else pickedLives.ids.add(r.item_id);
+          box.checked = pickedLives.ids.has(r.item_id); card.classList.toggle('picked', box.checked); selBar.paint();
+        } },
+          box,
           h('div', { class: 'grow' }, h('b', {}, it.title || 'Untitled'), h('div', { class: 'small muted' }, label + (r.state === 'ended' && r.started_at ? ` · ${new Date(r.started_at).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}` : '')),
             r.state !== 'live' && r.state !== 'ended' ? null : liveStats({ views: views.get(r.item_id), peak: r.peak_viewers, love: totals.get(r.item_id)?.love, chats: totals.get(r.item_id)?.chats })),
-          h('span', { class: 'badge', 'data-status': r.state === 'live' ? 'published' : '' }, r.state)));
+          h('span', { class: 'badge', 'data-status': onAir ? 'published' : '' }, r.state));
+        card.append(main);
+        if (!pickedLives.on && !onAir) {
+          const dots = h('button', { class: 'iconbtn live-dots', type: 'button', 'aria-label': 'More', onclick: (e) => {
+            e.stopPropagation();
+            popMenu(dots, [
+              { label: 'Open', onclick: () => nav.openLive(r.item_id) },
+              { label: 'Delete', danger: true, onclick: async () => { try { if (await deleteLivesFlow([r])) nav.refresh(); } catch (err) { toast(err.message || String(err)); } } },
+            ]);
+          } }, dotsIcon(20));
+          card.append(h('div', { class: 'menuwrap live-menu' }, dots));
+        }
+        body.append(card);
       }
     } catch (e) { body.replaceChildren(h('p', { class: 'error' }, 'Could not load: ' + (e.message || e) + '. Did you run migrations 005_live.sql and 006_live_part1.sql?')); }
   }

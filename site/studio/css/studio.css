@@ -500,3 +500,34 @@ input.rc-mname:hover, input.rc-mname:focus { border-color: var(--line); backgrou
   .console.ended .rc-main { flex: 1; min-height: 0; }
   .console.ended .rc-clips { max-height: 80px; }
 }
+
+/* =====================================================================================================
+   Update 2: select and delete, three-dot menus on live cards, thumbnail picker, home pictures.
+   ===================================================================================================== */
+.selbar { align-items: center; margin: .4rem 0 .2rem; gap: .5rem; }
+.selbox { width: 20px; height: 20px; accent-color: var(--accent); margin-right: .6rem; flex: none; pointer-events: none; }
+.item { position: relative; }
+.item.picked { border-color: var(--accent) !important; background: rgba(134, 196, 173, .08); }
+
+.live-card { position: relative; margin-top: .6rem; }
+.live-card .live-row { margin-top: 0; width: 100%; padding-right: 3.4rem; }
+.live-card.picked .live-row { border-color: var(--accent); background: rgba(134, 196, 173, .08); }
+.live-menu { position: absolute; top: .45rem; right: .45rem; }
+.live-row .selbox { margin-right: .4rem; }
+.live-grid .live-card { margin-top: 0; }
+.live-grid .live-card .live-row { height: 100%; }
+
+.tp-frame { aspect-ratio: 16 / 9; background: var(--bg); border-radius: 10px; overflow: hidden; margin: .5rem 0; border: 1px solid var(--line); }
+.tp-preview { width: 100%; height: 100%; object-fit: cover; display: block; touch-action: none; }
+.tp-pane { display: flex; gap: .6rem; align-items: center; margin: .7rem 0 .2rem; flex-wrap: wrap; }
+.tp-foot { margin-top: .9rem; gap: .5rem; }
+.tp-mini { width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); flex: none; }
+.tp-field { align-items: center; gap: .6rem; margin-top: .5rem; }
+.tp-at { min-width: 2.6rem; text-align: right; }
+.rc-formbox { margin-top: .3rem; }
+
+.hero-slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; margin-top: .6rem; }
+@media (min-width: 700px) { .hero-slots { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.hero-slot img, .hero-empty { aspect-ratio: 16 / 9; width: 100%; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.hero-empty { display: grid; place-items: center; color: var(--muted); background: var(--bg); font-size: 1.4rem; }
+.hero-slot .row { margin-top: .3rem; gap: .5rem; }

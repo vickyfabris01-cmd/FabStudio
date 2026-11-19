@@ -144,3 +144,9 @@ body.has-dock .foot { display: none; }
 .mini-ct { display: flex; gap: .7rem; color: var(--muted); font-size: .75rem; }
 .mini-ct span { display: inline-flex; align-items: center; gap: .2rem; }
 .mini-ct svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- long lines in the live card slide back and forth instead of wrapping or being cut ---------- */
+.l-slide { overflow: hidden; white-space: nowrap; min-width: 0; }
+.l-slide > span { display: inline-block; }
+.l-slide.slide > span { animation: ltitle var(--t, 8s) linear infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .l-slide.slide > span { animation: none; } .l-slide { text-overflow: ellipsis; } }

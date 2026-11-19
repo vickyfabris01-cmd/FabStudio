@@ -3,6 +3,7 @@
 import { h, fmtDur, fmtAgo, fmtWhen, toast } from '../shared/dom.js';
 import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady, displayName } from './auth-ui.js';
 import * as data from './data.js';
+import { maybeInvite } from './invite.js';
 
 const svg = (inner, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="${cls}">${inner}</svg>`;
 const ICON = {
@@ -159,6 +160,9 @@ async function main() {
 
   // The view belongs to the guest (or real) account as soon as it exists.
   guestReady().then((s) => { if (s) data.recordView(id, s.user.id); });
+
+  // After a poem has been played to its end, people without an account are invited to create one (once every 3 days).
+  document.addEventListener('ended', (e) => { if (e.target instanceof HTMLMediaElement) setTimeout(maybeInvite, 900); }, true);
 
   /* media */
   const src = data.mediaUrl(item.public_media_key);

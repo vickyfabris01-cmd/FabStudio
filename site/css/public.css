@@ -134,3 +134,64 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 
 #toast { position: fixed; left: 50%; bottom: calc(1.2rem + env(safe-area-inset-bottom)); transform: translate(-50%, 10px); background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 10px; max-width: 90vw; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 50; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- Home: invitation hero, filter, 16:9 cards ---------- */
+.wrap.wide { max-width: 1100px; }
+.hero-card { position: relative; overflow: hidden; border-radius: 18px; border: 1px solid var(--line); margin-top: 1rem; min-height: 260px; display: flex; align-items: flex-end;
+  background: radial-gradient(120% 140% at 85% 0%, #2c2540 0%, #1d1a25 45%, #14121a 100%); }
+.hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .8s ease; }
+.hero-bg.on { opacity: 1; }
+.hero-shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(20,18,26,.92) 0%, rgba(20,18,26,.62) 55%, rgba(20,18,26,.28) 100%), linear-gradient(0deg, rgba(20,18,26,.7), rgba(20,18,26,0) 55%); }
+.hero-in { position: relative; z-index: 1; padding: 1.5rem 1.3rem 1.3rem; max-width: 640px; }
+.hero-brand { display: flex; align-items: center; gap: .6rem; }
+.hero-mark { width: 44px; height: 44px; object-fit: contain; margin: 0; }
+.hero-card .tagline { color: var(--accent); font-size: .8rem; letter-spacing: .16em; text-transform: uppercase; }
+.hero-card h1 { font-size: clamp(1.9rem, 6.4vw, 2.9rem); line-height: 1.08; margin: .7rem 0 .4rem; }
+.hero-card p { color: #d3ccdb; font-family: var(--serif); font-size: 1.05rem; margin: 0; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+.hero-cta:empty { display: none; }
+.hero-live { display: inline-flex; align-items: center; min-height: 40px; padding: .35rem 1rem; border-radius: 999px; border: 1px solid var(--accent); color: var(--text); text-decoration: none; font-size: .95rem; background: rgba(20,18,26,.55); }
+.hero-live.on { border-color: var(--danger); color: #fff; background: rgba(229,115,106,.22); }
+.hero-invite { display: inline-block; margin-top: .9rem; font-size: .85rem; color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); }
+.hero-invite:hover { color: var(--accent); border-color: var(--accent); }
+.hero-invite[hidden] { display: none; }
+
+.filters { margin: 1.1rem 0 .3rem; display: flex; flex-wrap: wrap; gap: .5rem 1.4rem; align-items: center; }
+.filters[hidden] { display: none; }
+.frow { display: flex; flex-wrap: wrap; gap: .45rem; }
+.fchip { font: inherit; font-size: .92rem; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: .3rem .95rem; min-height: 38px; cursor: pointer; }
+.fchip[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.frow.fmt .fchip { font-size: .8rem; min-height: 32px; padding: .2rem .75rem; }
+.frow.fmt .fchip[aria-pressed="true"] { color: var(--text); background: var(--line); border-color: var(--line); }
+
+.pgrid { display: grid; gap: 1rem; grid-template-columns: 1fr; margin-top: .8rem; }
+@media (min-width: 620px) { .pgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 980px) { .pgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.pgrid > .empty { grid-column: 1 / -1; }
+.pcard { position: relative; display: block; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); color: #fff; text-decoration: none; }
+.pcard:hover, .pcard:focus-visible { border-color: var(--accent); }
+.pc-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.pc-img.ph { background: linear-gradient(135deg, #241f30, #14121a); }
+.pc-bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 1.6rem .8rem .55rem; background: linear-gradient(0deg, rgba(10,9,14,.88) 0%, rgba(10,9,14,.55) 55%, rgba(10,9,14,0) 100%); }
+.pc-title { font: 600 1.02rem/1.25 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: .15rem; }
+.pc-stats { display: flex; gap: .95rem; font-size: .78rem; color: #d3ccdb; }
+.pc-stats span { display: inline-flex; align-items: center; gap: .28rem; }
+.ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ic[data-fill] { fill: currentColor; stroke: none; }
+.pc-type { position: absolute; top: .55rem; left: .55rem; display: inline-flex; align-items: center; gap: .3rem; font-size: .74rem; padding: .2rem .6rem; border-radius: 999px; background: rgba(20,18,26,.72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); color: #fff; }
+.is-audio .pc-type { color: var(--accent); }
+.is-video .pc-type { color: #fff; }
+.pc-len { color: #d3ccdb; }
+.pc-tag { position: absolute; top: .55rem; right: .55rem; font-size: .72rem; padding: .2rem .6rem; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.pc-play { position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%); width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: rgba(10,9,14,.58); border: 1px solid rgba(255,255,255,.35); }
+.pc-play .ic { width: 22px; height: 22px; margin-left: 3px; }
+
+/* ---------- the invitation after a poem has been played ---------- */
+.invite { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 1rem; background: rgba(10,9,14,.68); }
+.invite-box { position: relative; width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 1.5rem 1.4rem 1.3rem; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.invite-box h2 { margin: 0 0 .4rem; padding-right: 1.6rem; }
+.invite-box p { color: var(--muted); margin: 0 0 1.1rem; }
+.invite-x { position: absolute; top: .5rem; right: .6rem; font: inherit; font-size: 1.6rem; line-height: 1; color: var(--muted); background: none; border: 0; min-width: 40px; min-height: 40px; cursor: pointer; }
+.invite-go { display: flex; gap: .6rem; flex-wrap: wrap; }
+.btn-go { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .4rem 1.3rem; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 600; text-decoration: none; }
+.btn-later { font: inherit; min-height: 44px; padding: .4rem 1.1rem; border-radius: 999px; color: var(--muted); background: transparent; border: 1px solid var(--line); cursor: pointer; }

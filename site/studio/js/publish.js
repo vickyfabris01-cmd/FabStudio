@@ -7,6 +7,8 @@ import { syncSoon, syncAndWait } from './sync.js';
 import { unpublishItem, deleteItemFiles, fetchMedia } from './api.js';
 import { requestPublish, jobFor, isBusy, onPublishJobs } from './publisher.js';
 import { thumbFromImage, thumbFromTitle, thumbFromVideo } from './thumbs.js';
+import { pickThumbnail } from './thumb-picker.js';
+import { createSelection, selectBar, tickBox } from './select.js';
 import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
 
 // One place to change the upload limits.
@@ -99,10 +101,11 @@ export async function createDraftFromFile(kind, file) {
 // liveId remembers which live it came from, so the recap can list its posts (kept on this device).
 // sourceLiveId is the same id saved with the post online, so the public page can leave recap posts out of
 // "More from Fabris".
-export async function createDraftFromClip({ liveId, title, blob, duration }) {
-  const thumb = await thumbFromTitle(title);
+// thumb / thumbKind / thumbLook: the thumbnail picked in the recap (a title card is drawn when none was picked).
+export async function createDraftFromClip({ liveId, title, blob, duration, thumb, thumbKind = 'title', thumbLook = 0 }) {
+  const card = thumb || await thumbFromTitle(title, 'Fabris Poet', thumbLook);
   const id = crypto.randomUUID();
-  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: blob.type || 'audio/webm', duration, blob, thumb }), liveId, sourceLiveId: liveId || null });
+  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: blob.type || 'audio/webm', duration, blob, thumb: card, thumbKind: thumb ? thumbKind : 'title' }), liveId, sourceLiveId: liveId || null, thumbVariant: thumbLook });
   syncSoon();
   return id;
 }
@@ -132,21 +135,44 @@ async function unpublishFlow(id) {
   return true;
 }
 
+// Removes one item (online files, reactions and comments too when it was saved online). ask=false skips the question
+// so several can be deleted after a single confirmation.
+async function removeItem(row) {
+  if (row.remote) {
+    await deleteItemFiles(row.id);
+    const { error } = await sb.from('published_items').delete().eq('id', row.id);
+    if (error) throw error;
+  }
+  await db.items.delete(row.id);
+  await db.uploads.delete(row.mediaKey);
+  await db.uploads.delete(row.thumbKey);
+}
+
 async function deleteFlow(id) {
   const row = await db.items.get(id);
   if (!row) return false;
   if (row.remote) {
     needNet();
     if (!confirm('Delete this item completely? Its files, reactions and comments are removed for good.')) return false;
-    await deleteItemFiles(id);
-    const { error } = await sb.from('published_items').delete().eq('id', id);
-    if (error) throw error;
   } else if (!confirm('Delete this draft?')) return false;
-  await db.items.delete(id);
-  await db.uploads.delete(row.mediaKey);
-  await db.uploads.delete(row.thumbKey);
+  await removeItem(row);
   toast('Deleted.');
   return true;
+}
+
+// Several at once (Select, then Delete). Items that are publishing right now are left alone.
+async function deleteItemsFlow(ids) {
+  const rows = (await Promise.all(ids.map((id) => db.items.get(id)))).filter(Boolean);
+  const todo = rows.filter((r) => !isBusy(r.id));
+  const skipped = rows.length - todo.length;
+  if (!todo.length) { toast('Those are publishing right now. Try again when they are done.'); return false; }
+  if (todo.some((r) => r.remote)) needNet();
+  const online = todo.filter((r) => r.remote).length;
+  if (!confirm(`Delete ${todo.length} item${todo.length === 1 ? '' : 's'}?${online ? `\n${online} saved online: files, reactions and comments are removed for good.` : ''}${todo.length - online ? `\n${todo.length - online} draft${todo.length - online === 1 ? '' : 's'} on this device.` : ''}`)) return false;
+  let done = 0;
+  for (const r of todo) { try { await removeItem(r); done++; } catch (e) { toast(`Could not delete "${r.title || 'Untitled'}": ${e.message || e}`); } }
+  toast(`${done} deleted${skipped ? `, ${skipped} skipped (publishing)` : ''}.`);
+  return done > 0;
 }
 
 /* ---------- views, reactions and comments (read only here) ---------- */
@@ -179,6 +205,7 @@ const statusText = (r) => (r.status === 'published'
 
 /* ---------- list (the Studio tab) ---------- */
 let listFilter = 'all';
+const picked = createSelection();   // Select mode of the Studio list
 
 export async function publishListView(nav) {
   const all = (await db.items.toArray()).filter((r) => r.kind !== 'live').sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
@@ -192,6 +219,26 @@ export async function publishListView(nav) {
   const filters = h('div', { class: 'filters' }, [['all', 'All'], ['drafts', 'Drafts'], ['published', 'Published']].map(([k, l]) =>
     h('button', { class: 'fchip' + (listFilter === k ? ' on' : ''), type: 'button', onclick: () => { listFilter = k; nav.refresh(); } }, l)));
 
+  const selBar = selectBar(picked, {
+    onMode: () => nav.refresh(),
+    onDelete: async () => { const ids = [...picked.ids]; if (await deleteItemsFlow(ids).catch((e) => { toast(e.message || String(e)); return false; })) { picked.on = false; picked.ids.clear(); nav.refresh(); } },
+  });
+  // The three-dot menu of a card: Open, Copy link and Unpublish (when published), Delete.
+  const menuFor = (r) => {
+    const dots = h('button', {
+      class: 'iconbtn', type: 'button', 'aria-label': 'More',
+      onclick: (e) => {
+        e.stopPropagation();
+        popMenu(dots, [
+          { label: 'Open', onclick: () => nav.open(r.id) },
+          ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, { label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }] : []),
+          { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
+        ]);
+      },
+    }, dotsIcon(20));
+    return h('div', { class: 'menuwrap' }, dots);
+  };
+
   const rowEl = (r) => {
     const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' })) : h('div', { class: 'thumb ph' });
     const job = isBusy(r.id) ? jobFor(r.id) : null;
@@ -202,32 +249,21 @@ export async function publishListView(nav) {
     if (!job && !failed) agos.push(() => { line.textContent = statusText(r); });
 
     let end;
-    if (job) {
+    if (picked.on) end = null;                       // while selecting, a tap only ticks
+    else if (job) {
       end = h('span', { class: 'badge', style: 'color:var(--accent);border-color:var(--accent)' }, job.pct + '%');
       ends.set(r.id, end);
     } else if (r.status === 'published') {
-      const dots = h('button', {
-        class: 'iconbtn', type: 'button', 'aria-label': 'More',
-        onclick: (e) => {
-          e.stopPropagation();
-          popMenu(dots, [
-            { label: 'Open', onclick: () => nav.open(r.id) },
-            { label: 'Copy link', onclick: () => copyLink(r.id) },
-            { label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) },
-            { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
-          ]);
-        },
-      }, dotsIcon(20));
-      end = h('div', { class: 'menuwrap' }, dots);
+      end = menuFor(r);
     } else {
-      end = h('button', {
+      end = h('div', { class: 'row' }, h('button', {
         class: 'btn small primary', type: 'button',
         onclick: (e) => {
           e.stopPropagation();
           requestPublish(r.id, r.title);
           toast(navigator.onLine ? 'Publishing in the background. You can keep using the app.' : 'It will publish when you are back online.');
         },
-      }, 'Publish');
+      }, 'Publish'), menuFor(r));
     }
 
     const body = h('div', { class: 'grow' }, h('div', { class: 'title' }, r.title || 'Untitled'), line);
@@ -236,7 +272,13 @@ export async function publishListView(nav) {
       stats.set(r.id, st);
       body.append(st);
     }
-    return h('li', { class: 'item', onclick: () => nav.open(r.id) }, thumb, body, end);
+    const box = picked.on ? tickBox(picked.ids.has(r.id)) : null;
+    const li = h('li', { class: 'item' + (picked.on && picked.ids.has(r.id) ? ' picked' : ''), onclick: () => {
+      if (!picked.on) return nav.open(r.id);
+      if (picked.ids.has(r.id)) picked.ids.delete(r.id); else picked.ids.add(r.id);
+      box.checked = picked.ids.has(r.id); li.classList.toggle('picked', box.checked); selBar.paint();
+    } }, box, thumb, body, end);
+    return li;
   };
 
   const list = rows.length
@@ -267,7 +309,7 @@ export async function publishListView(nav) {
   const el = h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Studio'),
       h('div', { class: 'row' }, live, h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake'))),
-    filters, list, upload);
+    filters, selBar.el, list, upload);
 
   if (navigator.onLine && stats.size) {
     loadCounters().then(() => { for (const [id, st] of stats) st.paint(counterCache.get(id)); }).catch(() => {});
@@ -352,12 +394,17 @@ export async function itemView(id, nav, prefill = {}) {
     bakeSel, srcInfo);
   bakeSel.onchange = () => useBake(baked.find((b) => b.id === bakeSel.value));
 
+  let thumbLook = 0;
   const thumbPanel = h('div', { class: 'panel' }, h('h3', {}, '2. Thumbnail'),
-    h('div', { class: 'seg' },
-      h('button', { class: 'btn', onclick: async () => { const f = await pickFile('image/*'); if (f) try { showThumb(await thumbFromImage(f), 'image'); } catch (e) { toast(e.message); } } }, 'Upload image'),
-      h('button', { class: 'btn', onclick: async () => { try { showThumb(await thumbFromTitle(title.value.trim() || 'Untitled'), 'title'); } catch (e) { toast(e.message); } } }, 'From title'),
-      h('button', { class: 'btn', onclick: async () => { if (src?.kind !== 'video') return toast('Pick a video first.'); try { showThumb(await thumbFromVideo(src.blob), 'video'); } catch (e) { toast(e.message); } } }, 'Video frame')),
-    preview);
+    h('p', { class: 'muted small' }, 'Leave it and a title card is drawn for you. Or upload an image, redraw the card, or pick a frame of a video.'),
+    preview,
+    h('div', { class: 'seg' }, h('button', {
+      class: 'btn', type: 'button',
+      onclick: async () => {
+        const r = await pickThumbnail({ title: title.value.trim() || 'Untitled', video: src?.kind === 'video' ? src.blob : null, current: thumb, look: thumbLook });
+        if (r) { showThumb(r.blob, r.kind); thumbLook = r.look; }
+      },
+    }, 'Choose thumbnail')));
 
   const save = h('button', {
     class: 'btn primary wide',
@@ -375,7 +422,7 @@ export async function itemView(id, nav, prefill = {}) {
           publicMediaKey: null, publicThumbKey: null, status: 'draft', publishedAt: null,
           commentsEnabled: comments.checked, reactionsEnabled: reactions.checked,
           createdAt: t, updatedAt: t, dirty: 1, remote: 0, blob: src.blob, thumbBlob: blob, mediaPending: 1, thumbPending: 1,
-          thumbKind: thumb ? thumbKind : 'title', needsRepublish: 0,
+          thumbKind: thumb ? thumbKind : 'title', thumbVariant: thumbLook, needsRepublish: 0,
         });
         syncSoon();
         toast('Draft saved. It uploads when you are online.');
@@ -417,7 +464,7 @@ async function existingView(first, nav) {
     let kind = item.thumbKind;
     if (!kind) kind = confirm('Also update the thumbnail card to show the new title?\nChoose Cancel to keep the current picture.') ? 'title' : 'custom';
     if (kind === 'title') {
-      patch.thumbBlob = await thumbFromTitle(t);
+      patch.thumbBlob = await thumbFromTitle(t, 'Fabris Poet', item.thumbVariant || 0);
       patch.thumbPending = 1;
       if (published()) patch.needsRepublish = 1;
     }
@@ -470,6 +517,20 @@ async function existingView(first, nav) {
   if (!item.thumbBlob && navigator.onLine) {
     fetchMedia(item.thumbKey).then(async (b) => { await db.items.update(id, { thumbBlob: b }); item = await db.items.get(id); setThumb(); }).catch(() => {});
   }
+
+  const thumbEdit = h('button', { class: 'btn small', type: 'button' }, 'Edit thumbnail');
+  thumbEdit.onclick = async () => {
+    const row = await db.items.get(id);
+    const r = await pickThumbnail({ title: item.title || 'Untitled', video: item.kind === 'video' ? row?.blob || null : null, current: item.thumbBlob || null, look: item.thumbVariant || 0 });
+    if (!r) return;
+    await db.items.update(id, { thumbBlob: r.blob, thumbPending: 1, thumbKind: r.kind, thumbVariant: r.look, updatedAt: now(), dirty: 1, ...(published() ? { needsRepublish: 1 } : {}) });
+    item = await db.items.get(id);
+    syncSoon();
+    setThumb();
+    paintStatus();
+    paintActions();
+    toast(published() ? 'Saved. Update and republish to show it on the public page.' : 'Thumbnail saved.');
+  };
 
   const getBlob = async () => {
     const row = await db.items.get(id);
@@ -636,7 +697,7 @@ async function existingView(first, nav) {
   paintActions();
   put(root,
     h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio')),
-    titleBox, wrap, status, descBox,
+    titleBox, wrap, h('div', { class: 'row' }, thumbEdit), status, descBox,
     published() ? statRow : null,
     progressSlot, actions, commentsBox);
 

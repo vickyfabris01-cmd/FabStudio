@@ -13,6 +13,7 @@ import { h, toast, probeDuration, eyeIcon, loveIcon } from '../ui.js';
 import { createDraftFromClip, publishItemNow } from '../publish.js';
 import { jobFor, onPublishJobs } from '../publisher.js';
 import { indexWebm, cutWebm, frameSizes } from './webm-cut.js';
+import { thumbField } from '../thumb-picker.js';
 
 const C = { accent: '#86c4ad', pick: '#4f8a75', rec: '#e5736a', line: '#2e2a3a', muted: '#9a93a8', text: '#ebe5d8', bg: '#14121a' };
 const WAVE_H = 72;
@@ -91,6 +92,7 @@ export async function recapPane(opts) {
     sel: new Set(),          // ticked segments (their start times)
     open: null,              // the segment whose publish form is open (its start time)
     joinTitle: '', joinEdited: false, wholeOpen: false,
+    fields: new Map(),       // per open form: its title and its thumbnail field, kept while the list is redrawn
     segKey: '', clipKey: '', panelKey: '', tab: 'chats',
     saved: null, savedAt: 0, loading: false,
   };
@@ -200,7 +202,7 @@ export async function recapPane(opts) {
 
   /* ----- publishing: the inline form, used for one segment, for several joined ones and for the whole recap ----- */
   const msg = h('p', { class: 'small rc-msg' });
-  async function publishRanges(title, ranges, what) {
+  async function publishRanges(title, ranges, what, tf) {
     if (st.busy) return false;
     title = String(title || '').trim();
     if (!title) { msg.className = 'small error rc-msg'; msg.textContent = 'Give it a title.'; return false; }
@@ -215,7 +217,8 @@ export async function recapPane(opts) {
         if (!(await probeDuration(cut.blob))) throw new Error('The cut did not produce playable audio.');
         blob = cut.blob; seconds = cut.durationMs / 1000;
       }
-      const id = await createDraftFromClip({ liveId: itemId, title, blob, duration: seconds });
+      const t = tf ? await tf.get() : null;   // the thumbnail picked for this post, or a title card
+      const id = await createDraftFromClip({ liveId: itemId, title, blob, duration: seconds, thumb: t?.blob, thumbKind: t?.kind, thumbLook: t?.look || 0 });
       publishItemNow(id, title).then(() => paintClips(true), () => paintClips(true));
       msg.textContent = `${what} "${title}" is on its way (${clock(seconds)}). It is a new post with fresh numbers.`;
       toast('Queued for publishing.');
@@ -225,18 +228,27 @@ export async function recapPane(opts) {
     } catch (e) { msg.className = 'small error rc-msg'; msg.textContent = e.message || String(e); st.busy = false; return false; }
   }
 
-  function formFor({ value, label, onGo, onCancel }) {
-    const input = h('input', { value, maxlength: 120, 'aria-label': 'Title' });
+  // One shared record per open form (its title and its thumbnail field), so redrawing the list never loses what was typed or picked.
+  const fieldFor = (key, def) => {
+    if (!st.fields.has(key)) { const rec = { title: def }; rec.tf = thumbField({ getTitle: () => rec.title }); st.fields.set(key, rec); }
+    return st.fields.get(key);
+  };
+  function formFor({ key, value, label, onGo, onCancel }) {
+    const rec = fieldFor(key, value);
+    const input = h('input', { value: rec.title, maxlength: 120, 'aria-label': 'Title' });
+    let t = 0;
+    input.oninput = () => { rec.title = input.value; clearTimeout(t); t = setTimeout(() => rec.tf.refresh(), 400); };
     const go = h('button', { class: 'btn primary small', type: 'button' }, label);
-    go.onclick = async () => { go.disabled = true; const ok = await onGo(input.value); go.disabled = false; if (ok) onCancel(); };
+    const close = () => { st.fields.delete(key); onCancel(); };
+    go.onclick = async () => { go.disabled = true; const ok = await onGo(input.value, rec.tf); go.disabled = false; if (ok) close(); };
     input.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
-    return { input, el: h('div', { class: 'row rc-formrow' }, h('div', { class: 'grow' }, input), go, h('button', { class: 'btn small', type: 'button', onclick: onCancel }, 'Cancel')) };
+    return { input, el: h('div', { class: 'rc-formbox' }, h('div', { class: 'row rc-formrow' }, h('div', { class: 'grow' }, input), go, h('button', { class: 'btn small', type: 'button', onclick: close }, 'Cancel')), rec.tf.el) };
   }
 
   whole.onclick = () => {
     if (st.wholeOpen) { st.wholeOpen = false; wholeForm.hidden = true; return; }
     st.wholeOpen = true; wholeForm.hidden = false;
-    const f = formFor({ value: `${liveTitle()} · full recap`, label: 'Publish', onGo: (t) => publishRanges(t, null, 'Recap'), onCancel: () => { st.wholeOpen = false; wholeForm.hidden = true; } });
+    const f = formFor({ key: 'whole', value: `${liveTitle()} · full recap`, label: 'Publish', onGo: (t, tf) => publishRanges(t, null, 'Recap', tf), onCancel: () => { st.wholeOpen = false; wholeForm.hidden = true; } });
     wholeForm.replaceChildren(h('p', { class: 'small muted' }, 'This makes a NEW post from the whole recording. The live keeps its own numbers.'), f.el);
     f.input.focus(); f.input.select();
   };
@@ -265,14 +277,14 @@ export async function recapPane(opts) {
         name = h('input', { class: 'inline rc-mname', value: s.label, maxlength: 80, 'aria-label': 'Timestamp name' });
         name.onchange = () => saveMarks(engine.s.markers.map((m) => (m === s.marker ? { ...m, label: name.value.trim() || 'Timestamp' } : m)));
       }
-      const pub = h('button', { class: 'btn small', type: 'button', disabled: len < 1 || st.busy, onclick: () => { st.open = st.open === s.start ? null : s.start; paintSegs(true); } }, 'Publish');
+      const pub = h('button', { class: 'btn small', type: 'button', disabled: len < 1 || st.busy, onclick: () => { if (st.open === s.start) st.fields.delete(`seg:${s.start}`); st.open = st.open === s.start ? null : s.start; paintSegs(true); } }, 'Publish');
       const del = s.implicit ? h('span', { class: 'rc-delgap' }) : h('button', { class: 'lnk', type: 'button', title: 'Delete this timestamp (the segment joins the one before it)', 'aria-label': 'Delete timestamp', onclick: () => saveMarks(engine.s.markers.filter((m) => m !== s.marker)) }, '✕');
       const row = h('div', { class: 'rc-seg' + (playing ? ' playing' : '') },
         h('div', { class: 'row rc-segrow' }, tick, play,
           h('div', { class: 'rc-segt' }, h('b', {}, clock(s.start)), h('span', { class: 'muted small' }, ` – ${clock(s.end)} · ${clock(len)}`)),
           h('div', { class: 'grow' }, name), pub, del));
       if (st.open === s.start) {
-        const f = formFor({ value: segTitle(s), label: 'Publish', onGo: (t) => publishRanges(t, [[s.start, s.end]], 'Segment'), onCancel: () => { st.open = null; paintSegs(true); } });
+        const f = formFor({ key: `seg:${s.start}`, value: segTitle(s), label: 'Publish', onGo: (t, tf) => publishRanges(t, [[s.start, s.end]], 'Segment', tf), onCancel: () => { st.open = null; paintSegs(true); } });
         row.append(f.el);
         setTimeout(() => { f.input.focus(); f.input.select(); }, 0);
       }
@@ -288,18 +300,20 @@ export async function recapPane(opts) {
     joinBar.hidden = picked.length < 2;
     if (picked.length < 2) { st.joinEdited = false; return; }
     const auto = `${liveTitle()} · ${picked.map((s) => s.label).join(' + ')}`;
-    if (!st.joinEdited) st.joinTitle = auto;
-    const input = h('input', { value: st.joinTitle, maxlength: 120, 'aria-label': 'Title for the joined post' });
-    input.oninput = () => { st.joinTitle = input.value; st.joinEdited = true; };
+    const rec = fieldFor('join', auto);
+    if (!st.joinEdited && rec.title !== auto) { rec.title = auto; rec.tf.refresh(); }
+    const input = h('input', { value: rec.title, maxlength: 120, 'aria-label': 'Title for the joined post' });
+    let t = 0;
+    input.oninput = () => { rec.title = input.value; st.joinEdited = true; clearTimeout(t); t = setTimeout(() => rec.tf.refresh(), 400); };
     const go = h('button', { class: 'btn primary small', type: 'button', disabled: st.busy }, `Join & publish (${picked.length})`);
+    const clear = () => { st.sel.clear(); st.joinEdited = false; st.fields.delete('join'); paintSegs(true); draw(); };
     go.onclick = async () => {
       go.disabled = true;
-      const ok = await publishRanges(st.joinTitle, picked.map((s) => [s.start, s.end]), 'Joined clip');
-      if (ok) { st.sel.clear(); st.joinEdited = false; }
-      paintSegs(true); draw();
+      const ok = await publishRanges(rec.title, picked.map((s) => [s.start, s.end]), 'Joined clip', rec.tf);
+      if (ok) clear(); else { paintSegs(true); draw(); }
     };
     joinBar.replaceChildren(h('div', { class: 'small muted' }, `Joined in recording order, no re-encoding. There may be a faint click where two parts meet.`),
-      h('div', { class: 'row rc-formrow' }, h('div', { class: 'grow' }, input), go, h('button', { class: 'btn small', type: 'button', onclick: () => { st.sel.clear(); st.joinEdited = false; paintSegs(true); draw(); } }, 'Clear')));
+      h('div', { class: 'row rc-formrow' }, h('div', { class: 'grow' }, input), go, h('button', { class: 'btn small', type: 'button', onclick: clear }, 'Clear')), rec.tf.el);
   }
 
   /* ----- posts made from this recap ----- */

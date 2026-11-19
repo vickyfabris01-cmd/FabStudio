@@ -9,6 +9,10 @@ import { publishListView, itemView } from './publish.js';
 import { bakerView, openBakeModal } from './baker.js';
 import { liveListView, liveConsoleView } from './live.js';
 import { homeView } from './home.js';
+import { pickThumbnail } from './thumb-picker.js';
+import { putHero } from './api.js';
+import { sb } from '../../shared/supabase.js';
+import { CONFIG } from '../../shared/config.js';
 import { performanceView } from './performance.js';
 import { engine } from './live-engine.js';
 import { folderSupported, listFolders, addFolder, removeFolder, folderAllowed } from './console/myaudio.js';
@@ -79,6 +83,7 @@ async function boot() {
   armHistory();
   renderShell();
   startSyncLoop();
+  backfillColumns();
 }
 
 function renderLogin() {
@@ -564,6 +569,61 @@ async function freeSpace() {
   toast(`Freed ${n} file${n === 1 ? '' : 's'}. They are still in the cloud.`);
 }
 
+// Once, after migrations 007 and 008 are run: tell the server which posts have a drawn title card (the home page then
+// does not repeat their title) and which posts were made from a live recap (so they show under "Live recap").
+async function backfillColumns() {
+  try {
+    if (!navigator.onLine || localStorage.getItem('fabstudio.backfill.v2')) return;
+    const probe = await sb.from('published_items').select('thumb_kind,source_live_id').limit(1);
+    if (probe.error) return;   // the migrations are not run yet: try again next time
+    await db.items.toCollection().modify((r) => {
+      let touch = false;
+      if (r.remote && r.thumbKind) touch = true;
+      if (r.liveId && !r.sourceLiveId) { r.sourceLiveId = r.liveId; touch = true; }
+      if (touch) { r.dirty = 1; r.updatedAt = now(); }
+    });
+    localStorage.setItem('fabstudio.backfill.v2', '1');
+    syncSoon();
+  } catch { /* try again next time */ }
+}
+
+async function heroPictures() {
+  const panel = h('div', { class: 'panel' }, h('h3', {}, 'Home page pictures'));
+  if (!navigator.onLine) return panel.append(h('p', { class: 'muted small' }, 'Needs internet.')), panel;
+  const { data, error } = await sb.from('hero_images').select('slot,key,updated_at').order('slot');
+  if (error) return panel.append(h('p', { class: 'muted small' }, 'Run migration 008_home_hero_thumbs.sql in Supabase first.')), panel;
+  const by = new Map((data || []).map((r) => [r.slot, r]));
+  const full = by.size >= 7;
+  const grid = h('div', { class: 'hero-slots' });
+  const url = (k) => `${CONFIG.API_BASE}/public/${k}`;
+  for (let slot = 1; slot <= 7; slot++) {
+    const cur = by.get(slot);
+    const set = async () => {
+      const r = await pickThumbnail({ imageOnly: true, heading: `Home picture ${slot}` });
+      if (!r) return;
+      try {
+        toast('Uploading…');
+        const key = await putHero(slot, r.blob);
+        const { error: e2 } = await sb.from('hero_images').upsert({ slot, key, updated_at: new Date().toISOString() }, { onConflict: 'slot' });
+        if (e2) throw e2;
+        toast('Saved.'); renderView();
+      } catch (e) { toast('Could not save: ' + (e.message || e)); }
+    };
+    const remove = async () => {
+      if (!confirm(`Remove picture ${slot}?`)) return;
+      const { error: e2 } = await sb.from('hero_images').delete().eq('slot', slot);
+      if (e2) return toast(e2.message);
+      renderView();
+    };
+    grid.append(h('div', { class: 'hero-slot' },
+      cur ? h('img', { src: url(cur.key), alt: `Home picture ${slot}`, loading: 'lazy' }) : h('div', { class: 'hero-empty' }, String(slot)),
+      h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: set }, cur ? 'Replace' : 'Add'),
+        cur && !full ? h('button', { class: 'lnk', type: 'button', onclick: remove }, 'Remove') : null)));
+  }
+  panel.append(h('p', { class: 'muted small' }, `${by.size} of 7 pictures. One is shown on the home page each day, in turn.${full ? ' All 7 are used, so they can only be replaced.' : ''}`), grid);
+  return panel;
+}
+
 async function settingsView() {
   const owner = await auth.ownerInfo();
   const p = prefs();
@@ -589,6 +649,9 @@ async function settingsView() {
     h('span', { class: 'grow' }, f.name, allowed.get(f.id) ? '' : h('span', { class: 'muted small' }, ' (needs Allow)')),
     allowed.get(f.id) ? null : h('button', { class: 'btn small', type: 'button', onclick: async () => { await folderAllowed(f.handle, true); renderView(); } }, 'Allow'),
     h('button', { class: 'btn small danger', type: 'button', onclick: async () => { if (window.confirm(`Remove "${f.name}" from this list? The files are not touched.`)) { await removeFolder(f.id); renderView(); } } }, 'Remove')));
+  // The home page hero: up to 7 pictures, one shown per day. Once all 7 are used they can only be replaced.
+  const heroPanel = await heroPictures();
+
   const folderPanel = h('div', { class: 'panel' }, h('h3', {}, 'Audio folders'),
     !folderSupported() ? h('p', { class: 'muted small' }, 'Choosing a folder needs Chrome or Edge on a laptop.')
       : [folders.length ? h('div', {}, ...folderRows) : h('p', {}, 'No folder chosen yet.'),
@@ -613,6 +676,7 @@ async function settingsView() {
       h('p', {}, 'Cloud (R2): not set up yet'),
       h('progress', { max: 100, value: 0 }),
       h('p', { class: 'muted small' }, 'Cloud usage will show here once it is configured.')),
+    heroPanel,
     folderPanel,
     h('div', { class: 'panel' }, h('h3', {}, 'Recording'),
       h('label', { class: 'row check' }, raw, h('span', {}, 'Raw audio (turn off voice processing). Use with your soundcard or music.')),

@@ -164,6 +164,7 @@ export class LiveRoom {
     }
     this.scheduleCount();
     await this.armAlarm();
+    if (owner && att.console) this.viewsTotal().then((n) => { if (n != null) this.send(ws, { t: 'views', n }); });   // a console that opens later starts from the real total
     if (!owner && !this.isBlocked(att)) await this.recordView(att);
   }
 
@@ -195,6 +196,22 @@ export class LiveRoom {
     let isNew = false;
     try { isNew = (await r.json()) === true; } catch { /* not a boolean */ }
     if (isNew) this.toHost({ t: 'view' });
+    // The public page also records the view the moment it loads, often before this room does, and then this call is
+    // not "new". So the host always gets the real total from the database, whoever recorded it.
+    const n = await this.viewsTotal();
+    if (n != null) this.toHost({ t: 'views', n });
+  }
+
+  // The live's view count as saved in the database (null when it cannot be read).
+  async viewsTotal() {
+    const item = this.st.itemId;
+    if (!item) return null;
+    try {
+      const r = await this.sb('GET', `counters?item_id=eq.${item}&select=n_views`);
+      if (!r || !r.ok) return null;
+      const rows = await r.json();
+      return Array.isArray(rows) && rows[0] ? Number(rows[0].n_views) || 0 : 0;
+    } catch { return null; }
   }
 
   loveAllow(uid) {

@@ -10,7 +10,10 @@ async function must(q) {
   return data;
 }
 
-export const listItems = () => must(sbp.from('items_public').select('*').not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(60));
+export const listItems = () => must(sbp.from('items_public').select('*').not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(120));
+
+// The pictures for the home page hero (slot 1 to 7). Empty when none were uploaded or migration 008 is not run yet.
+export const listHero = async () => { try { return await must(sbp.from('hero_images').select('slot,key,updated_at').order('slot')); } catch { return []; } };
 export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id', id).maybeSingle());
 // The latest poems other than this one, for "More from Fabris".
 export const listMore = (excludeId) =>

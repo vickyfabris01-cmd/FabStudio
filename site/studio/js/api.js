@@ -7,6 +7,12 @@ const PART = 8 * 1024 * 1024;
 const q = encodeURIComponent;
 
 // Other modules listen here to see how far an upload has got. detail = { key, loaded, total }, in bytes.
+// The home page hero pictures: a 16:9 JPEG goes to one of 7 slots in the public bucket. Returns the new key.
+export async function putHero(slot, blob) {
+  const res = await call(`/hero/put?slot=${slot}`, { method: 'PUT', body: blob, headers: { 'Content-Type': 'image/jpeg' } });
+  return (await res.json()).key;
+}
+
 export const uploadEvents = new EventTarget();
 const report = (key, loaded, total) => uploadEvents.dispatchEvent(new CustomEvent('progress', { detail: { key, loaded, total } }));
 
