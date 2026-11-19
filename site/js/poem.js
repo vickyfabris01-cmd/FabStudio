@@ -1,4 +1,5 @@
-// One poem: sliding title, player, time and views, description, Love and Like, comments.
+// One poem: sliding title, player, time and views, description, Like, comments.
+// (Love was removed from posts. Old Love data stays in the database, hidden; Love on a live is a different thing.)
 import { h, fmtDur, fmtAgo, fmtWhen, toast } from '../shared/dom.js';
 import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady, displayName } from './auth-ui.js';
 import * as data from './data.js';
@@ -166,25 +167,21 @@ async function main() {
     ? h('video', { class: 'player', controls: true, playsinline: true, preload: 'metadata', poster: thumb, src })
     : audioStage({ src, thumb, duration: item.duration }).el;
 
-  /* Love, Like and the comment button */
+  /* Like and the comment button */
   let mine = new Set();
-  const nLove = h('span', { class: 'n' }, '0');
   const nLike = h('span', { class: 'n' }, '0');
   const nCom = h('span', { class: 'n' }, '0');
   const reactBtn = (type, label, n) => h('button', {
     class: 'react', 'data-type': type, 'aria-label': label, 'aria-pressed': 'false', disabled: !item.reactions_enabled, onclick: () => react(type),
   }, icon(type), n);
-  const loveBtn = reactBtn('love', 'Love', nLove);
   const likeBtn = reactBtn('like', 'Like', nLike);
   const comBtn = h('button', { class: 'react', 'data-type': 'comment', 'aria-label': 'Comments', 'aria-expanded': 'false', onclick: () => toggleComments() }, icon('comment'), nCom);
   const views = h('span', {});
 
   const paintPressed = () => {
-    loveBtn.setAttribute('aria-pressed', String(mine.has('love')));
     likeBtn.setAttribute('aria-pressed', String(mine.has('like')));
   };
   const paintCounts = (row) => {
-    nLove.textContent = String(row.n_love ?? 0);
     nLike.textContent = String(row.n_like ?? 0);
     nCom.textContent = String(row.n_comments ?? 0);
     views.textContent = plural(row.n_views ?? 0, 'view');
@@ -304,7 +301,7 @@ async function main() {
     media,
     h('p', { class: 'meta' }, fmtAgo(item.published_at), ' · ', views),
     description ? description.el : null,
-    h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, loveBtn, likeBtn, comBtn, shareBtn),
+    h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, likeBtn, comBtn, shareBtn),
     h('section', { class: 'comments-box' }, h('h2', { class: 'sr' }, 'Comments'), preview, panel),
     moreBox,
   ].filter(Boolean));

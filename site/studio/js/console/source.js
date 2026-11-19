@@ -6,7 +6,8 @@
 import { db } from '../db.js';
 import { h, toast, fmtDur, probeDuration } from '../ui.js';
 import { deck } from './deck.js';
-import { folderSupported, getFolder, pickFolder, folderAllowed, listAudio } from './myaudio.js';
+import { folderSupported, listFolders, addFolder, removeFolder, folderAllowed, listAudio, fileKey } from './myaudio.js';
+import { playlist } from './playlist.js';
 
 export const poemName = (p) => (p.title || '').trim() || (p.stanzas?.[0] || '').split('\n')[0] || 'Untitled';
 
@@ -15,7 +16,7 @@ class Source extends EventTarget {
     super();
     this.mode = 'poem';    // 'poem' | 'music': the first source of truth
     this.poemId = '';      // picked poem ('' = none)
-    this.music = null;     // picked file: { path, name, handle } or null
+    this.music = null;     // picked file: { path, name, handle, folderId, key } or null (key is what the Deck uses)
   }
   emit() { this.dispatchEvent(new Event('change')); }
   on(fn) { this.addEventListener('change', fn); return () => this.removeEventListener('change', fn); }
@@ -24,9 +25,11 @@ class Source extends EventTarget {
   setMusic(m) { this.music = m || null; this.emit(); }
 }
 export const source = new Source();
+// When loop, next or previous moves to another track, the header follows it.
+playlist.onTrack((t) => source.setMusic({ path: t.path, name: t.name, handle: t.handle, folderId: t.folderId, key: t.key }));
 
 export function sourceControl() {
-  const st = { open: false, q: '', poems: [], files: [], dur: new Map(), music: 'loading', handle: null, tuneFor: '', tune: '' };
+  const st = { open: false, q: '', poems: [], files: [], dur: new Map(), music: 'loading', folders: [], folder: null, perm: new Map(), tuneFor: '', tune: '' };
 
   const mode = h('select', { class: 'src-mode', 'aria-label': 'Poem or music' }, h('option', { value: 'poem' }, 'Poem'), h('option', { value: 'music' }, 'Music'));
   const main = h('span', { class: 'src-main' });
@@ -34,7 +37,13 @@ export function sourceControl() {
   const name = h('button', { class: 'src-name', type: 'button', 'aria-haspopup': 'listbox', 'aria-expanded': 'false' }, main, sub, h('span', { class: 'src-caret', 'aria-hidden': 'true' }, '▾'));
   const search = h('input', { class: 'ma-search', type: 'search', placeholder: 'Search', 'aria-label': 'Search' });
   const list = h('div', { class: 'src-list', role: 'listbox' });
-  const pop = h('div', { class: 'src-pop', hidden: true }, search, list);
+  // Music only: which saved folder you are looking at, and adding or removing folders. Looking at another folder
+  // does not change what loops; only picking a track from it does.
+  const folderSel = h('select', { class: 'src-folder', 'aria-label': 'Folder' });
+  const addBtn = h('button', { class: 'btn small', type: 'button' }, 'Add folder');
+  const rmBtn = h('button', { class: 'btn small', type: 'button' }, 'Remove');
+  const folderBar = h('div', { class: 'src-folders', hidden: true }, folderSel, addBtn, rmBtn);
+  const pop = h('div', { class: 'src-pop', hidden: true }, folderBar, search, list);
   const el = h('div', { class: 'src' }, mode, name, pop);
 
   /* ----- the lists ----- */
@@ -49,17 +58,25 @@ export function sourceControl() {
   }
 
   function drawMusic() {
-    const s = st.music;
-    search.hidden = s !== 'ready';
+    const m = st.music;
+    folderBar.hidden = m === 'unsupported' || m === 'loading';
+    search.hidden = m !== 'ready';
     shown = [];
-    if (s === 'loading') return list.replaceChildren(h('p', { class: 'muted small' }, 'Looking at your folder…'));
-    if (s === 'unsupported') return list.replaceChildren(h('p', { class: 'muted' }, 'Choosing a folder needs Chrome or Edge on a laptop.'));
-    if (s === 'none') return list.replaceChildren(h('p', { class: 'muted' }, 'No audio folder yet. Files stay where they are and are never copied.'),
-      h('button', { class: 'btn', type: 'button', onclick: async () => { try { await pickFolder(); loadMusic(); } catch { /* cancelled */ } } }, 'Choose folder'));
-    if (s === 'allow') return list.replaceChildren(h('p', { class: 'muted' }, `The browser needs your permission to read ${st.handle?.name || 'the folder'} again. Once after each restart.`),
+    if (m === 'loading') return list.replaceChildren(h('p', { class: 'muted small' }, 'Looking at your folders…'));
+    if (m === 'unsupported') return list.replaceChildren(h('p', { class: 'muted' }, 'Choosing a folder needs Chrome or Edge on a laptop.'));
+    // the folder chooser: every saved folder, with the ones that need permission marked
+    folderSel.replaceChildren(...st.folders.map((f) => h('option', { value: f.id, selected: f.id === st.folder?.id }, f.name + (st.perm.get(f.id) === false ? ' (needs Allow)' : ''))));
+    folderSel.hidden = !st.folders.length;
+    rmBtn.hidden = !st.folders.length;
+    if (m === 'none') return list.replaceChildren(h('p', { class: 'muted' }, 'No audio folder yet. Files stay where they are and are never copied.'),
+      h('button', { class: 'btn', type: 'button', onclick: addAFolder }, 'Choose folder'));
+    if (m === 'allow') return list.replaceChildren(h('p', { class: 'muted' }, `The browser needs your permission to read ${st.folder?.name || 'the folder'} again. Once after each restart, for each folder.`),
       h('button', { class: 'btn primary', type: 'button', onclick: () => loadMusic(true) }, 'Allow'));
     const q = st.q;
-    shown = st.files.filter((f) => !q || f.path.toLowerCase().includes(q)).map((f) => ({ label: f.name, on: source.music?.path === f.path, extra: st.dur.get(f.path) ? fmtDur(st.dur.get(f.path)) : '', pick: () => pickMusic(f) }));
+    shown = st.files.filter((f) => !q || f.path.toLowerCase().includes(q)).map((f) => {
+      const k = fileKey(st.folder.id, f.path);
+      return { label: f.name, on: source.music?.key === k, extra: st.dur.get(k) ? fmtDur(st.dur.get(k)) : '', pick: () => pickMusic(f) };
+    });
     list.replaceChildren(...(shown.length ? shown.map((r) => row(r.label, { on: r.on, extra: r.extra, onclick: r.pick })) : [h('p', { class: 'muted small' }, st.files.length ? 'No file matches.' : 'No audio files in this folder.')]));
   }
 
@@ -74,21 +91,38 @@ export function sourceControl() {
     st.music = 'loading'; if (st.open && source.mode === 'music') drawMusic();
     if (!folderSupported()) st.music = 'unsupported';
     else {
-      st.handle = await getFolder();
-      if (!st.handle) st.music = 'none';
-      else if (!(await folderAllowed(st.handle, ask))) st.music = 'allow';
-      else { try { st.files = await listAudio(st.handle); st.music = 'ready'; } catch { st.music = 'allow'; } }
+      st.folders = await listFolders();
+      // the folder being looked at: the one chosen last, else the one the loop is in, else the first
+      st.folder = st.folders.find((f) => f.id === st.folder?.id) || st.folders.find((f) => f.id === playlist.ctx?.folderId) || st.folders[0] || null;
+      st.perm = new Map();
+      for (const f of st.folders) st.perm.set(f.id, await folderAllowed(f.handle));   // asks nothing: only checks
+      if (!st.folder) st.music = 'none';
+      else if (!(await folderAllowed(st.folder.handle, ask))) st.music = 'allow';
+      else { st.perm.set(st.folder.id, true); try { st.files = await listAudio(st.folder.handle); st.music = 'ready'; } catch { st.music = 'allow'; } }
     }
     if (st.open && source.mode === 'music') drawMusic();
     if (st.music === 'ready') probeAll();
   }
 
+  async function addAFolder() {
+    try { const f = await addFolder(); st.folder = f; await loadMusic(true); } catch { /* cancelled */ }
+  }
+  addBtn.onclick = addAFolder;
+  rmBtn.onclick = async () => {
+    if (!st.folder) return;
+    if (!window.confirm(`Remove "${st.folder.name}" from this list? The files are not touched.`)) return;
+    await removeFolder(st.folder.id); st.folder = null; loadMusic();
+  };
+  folderSel.onchange = () => { st.folder = st.folders.find((f) => f.id === folderSel.value) || null; st.q = ''; search.value = ''; loadMusic(); };
+
   // Lengths are read from the files themselves, one after another, while the list is open.
   async function probeAll() {
+    const folder = st.folder;
     for (const f of st.files.slice(0, 200)) {
-      if (!st.open || st.music !== 'ready') return;
-      if (st.dur.has(f.path)) continue;
-      try { st.dur.set(f.path, await probeDuration(await f.handle.getFile())); } catch { st.dur.set(f.path, 0); }
+      if (!st.open || st.music !== 'ready' || st.folder !== folder) return;
+      const k = fileKey(folder.id, f.path);
+      if (st.dur.has(k)) continue;
+      try { st.dur.set(k, await probeDuration(await f.handle.getFile())); } catch { st.dur.set(k, 0); }
       if (st.open && source.mode === 'music') drawMusic();
     }
   }
@@ -97,9 +131,12 @@ export function sourceControl() {
   function pickPoem(id) { source.setPoem(id); close(); }
   async function pickMusic(f) {
     try {
+      const folder = st.folder;
+      const key = fileKey(folder.id, f.path);
       const file = await f.handle.getFile();
-      await deck.load(file, { source: 'file', key: f.path, name: f.name });
-      source.setMusic({ path: f.path, name: f.name, handle: f.handle });
+      await deck.load(file, { source: 'file', key, name: f.name });
+      source.setMusic({ path: f.path, name: f.name, handle: f.handle, folderId: folder.id, key });
+      playlist.set(folder.id, st.files, f.path);   // the loop now stays inside this folder
       close();
     } catch { toast('That file could not be opened. It may have been moved.'); loadMusic(); }
   }

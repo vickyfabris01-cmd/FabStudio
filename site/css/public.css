@@ -76,8 +76,6 @@ video.player { background: #000; aspect-ratio: 16 / 9; }
 .react .ico { display: inline-flex; }
 .react .n { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .9rem; }
 .react.share { margin-left: auto; padding: .4rem .75rem; }
-.react[data-type='love'][aria-pressed='true'] { color: #e5534b; border-color: #e5534b; }
-.react[data-type='love'][aria-pressed='true'] svg { fill: #e5534b; }
 .react[data-type='like'][aria-pressed='true'] { border-color: var(--text); }
 .react[data-type='like'][aria-pressed='true'] svg { fill: currentColor; }
 .react[data-type='comment'][aria-expanded='true'] { border-color: var(--accent); color: var(--accent); }

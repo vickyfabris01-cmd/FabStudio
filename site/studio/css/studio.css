@@ -363,3 +363,136 @@ body.baking #toast { bottom: 11rem; }
 .c-voltxt { width: 2.6rem; flex: none; }
 .rd-time { min-width: 5.4rem; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rd-empty { margin: .2rem 0; }
+
+/* =====================================================================================================
+   Update: laptop shell (Home, no sidebar, card grids), live recap, music loop and folders, Performance.
+   Everything above is untouched; these rules come last so they win where they overlap.
+   ===================================================================================================== */
+
+/* ---------- Home button and brand ---------- */
+.homebtn { display: none; font: inherit; font-size: .9rem; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: .3rem .8rem; cursor: pointer; }
+.homebtn[hidden] { display: none !important; }
+
+/* ---------- live cards: numbers under the title ---------- */
+.live-stats { display: flex; flex-wrap: wrap; gap: .3rem .9rem; margin: .3rem 0 0; font-size: .85rem; color: var(--muted); }
+.live-stats span { display: inline-flex; align-items: center; gap: .25rem; }
+.live-stats b { font-weight: 600; color: var(--text); }
+.live-stats .is-love, .live-stats .is-love b { color: var(--rec); }
+.live-grid > p { grid-column: 1 / -1; }
+
+/* ---------- Music: folders, loop, previous and next ---------- */
+.src-folders { display: flex; gap: .4rem; align-items: center; margin-bottom: .5rem; }
+.src-folders[hidden], .src-folders > [hidden] { display: none; }
+.src-folder { flex: 1; min-width: 0; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: .35rem .5rem; }
+.rd-music { display: inline-flex; gap: .25rem; }
+.rd-music[hidden] { display: none; }
+.rd-pn, .rd-loop { padding: .2rem .5rem; min-width: 34px; }
+.rd-loop.on { color: var(--accent); border-color: var(--accent); background: rgba(134, 196, 173, .12); }
+.folder-row { padding: .35rem 0; border-top: 1px solid var(--line); }
+
+/* ---------- Home ---------- */
+.home-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; margin: .6rem 0 1rem; }
+.home-tile { display: flex; flex-direction: column; gap: .15rem; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .7rem .9rem; min-width: 0; }
+.home-tile b { font-family: var(--serif); font-size: 1.6rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.home-tile .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .9rem; }
+.home-card { display: flex; flex-direction: column; align-items: flex-start; gap: .35rem; text-align: left; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.2rem; cursor: pointer; min-height: 130px; }
+.home-card:hover, .home-card:focus-visible { border-color: var(--accent); }
+.home-card b { font-family: var(--serif); font-size: 1.2rem; font-weight: 500; }
+.home-ic { color: var(--accent); display: inline-flex; }
+
+/* ---------- Performance ---------- */
+.perf-tabs { margin-bottom: .8rem; }
+.perf-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .8rem; }
+.perf-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .9rem; align-items: start; }
+.perf-col { margin: 0; }
+.perf-col h3 { margin: 0 0 .5rem; }
+.perf-list { list-style: decimal inside; margin: 0; padding: 0; }
+.perf-list li { border-top: 1px solid var(--line); }
+.perf-row { display: flex; align-items: baseline; gap: .4rem; width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; padding: .4rem 0; cursor: pointer; }
+.perf-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* ---------- Recap ---------- */
+.c-recap { margin-top: 0; }
+.rc-top { align-items: center; gap: .8rem; flex-wrap: wrap; }
+.rc-top h3 { margin: 0; }
+.rc-top .small { margin: .1rem 0 0; }
+.rc-stats { display: flex; gap: .5rem; flex-wrap: wrap; }
+.rc-st { display: inline-flex; align-items: center; gap: .3rem; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .65rem; font-size: .85rem; color: var(--muted); }
+.rc-st b { color: var(--text); font-variant-numeric: tabular-nums; }
+.rc-st.is-love, .rc-st.is-love b { color: var(--rec); }
+.rc-stl { font-size: .78rem; }
+.rc-form { margin: .5rem 0 0; }
+.rc-formrow { gap: .4rem; align-items: center; margin-top: .4rem; flex-wrap: nowrap; }
+.rc-formrow input { width: 100%; }
+.rc-main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 1rem; margin-top: .6rem; }
+.rc-left, .rc-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.rc-wave { width: 100%; height: 72px; display: block; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.rc-ctl { margin-top: .3rem; align-items: center; flex-wrap: nowrap; }
+.rc-time { font-variant-numeric: tabular-nums; }
+.rc-listhead { margin: .6rem 0 .3rem; align-items: center; }
+.rc-listhead h4 { margin: 0; }
+.rc-segs { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.rc-seg { padding: .35rem .6rem; border-bottom: 1px solid var(--line); }
+.rc-seg:last-child { border-bottom: 0; }
+.rc-seg.playing { background: rgba(134, 196, 173, .1); }
+.rc-segrow { gap: .5rem; align-items: center; flex-wrap: nowrap; }
+.rc-play { min-width: 34px; padding: .2rem .5rem; }
+.rc-play.on { color: var(--accent); border-color: var(--accent); }
+.rc-segt { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rc-mname { width: 100%; min-width: 0; }
+input.rc-mname { font: inherit; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 6px; padding: .2rem .35rem; }
+input.rc-mname:hover, input.rc-mname:focus { border-color: var(--line); background: var(--surface); }
+.rc-delgap { width: 1.4rem; }
+.rc-join { margin-top: .5rem; padding: .5rem .6rem; border: 1px solid var(--accent); border-radius: 10px; background: rgba(134, 196, 173, .08); }
+.rc-join[hidden], .rc-form[hidden] { display: none; }
+.rc-msg { margin: .4rem 0 0; min-height: 1.1em; }
+.rc-done { margin-top: .4rem; font-size: .9rem; }
+.rc-done summary { cursor: pointer; color: var(--muted); }
+.rc-clips { max-height: 110px; overflow-y: auto; }
+.rc-clipitem { display: flex; gap: .6rem; align-items: baseline; padding: .25rem 0; border-top: 1px solid var(--line); }
+.rc-panelbody { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: .5rem .7rem; }
+.rc-chat .cline { padding: .2rem 0; }
+.rc-ct { font-variant-numeric: tabular-nums; font-size: .78rem; margin-right: .2rem; }
+.rc-vrow { display: flex; gap: .5rem; align-items: baseline; padding: .25rem 0; border-top: 1px solid var(--line); }
+.rc-vhead { border-top: 0; }
+.rc-vc { width: 3.6rem; text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+.rc-lv { color: var(--rec); }
+.rc-vname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+@media (max-width: 899px) {
+  .rc-main { grid-template-columns: 1fr; }
+  .rc-segs { max-height: 55vh; }
+  .rc-panelbody { max-height: 50vh; }
+  .rc-segrow { flex-wrap: wrap; }
+  .rc-formrow { flex-wrap: wrap; }
+}
+
+/* ---------- Laptop (900px and wider): no sidebar, Home, cards, recap on one screen ---------- */
+@media (min-width: 900px) {
+  #app { grid-template-columns: 1fr; }
+  .tabs { display: none; }
+  #view { grid-column: 1; max-width: 1280px; padding: 1rem 1.4rem; }
+  .brand { cursor: pointer; }
+  .homebtn { display: inline-flex; }
+  #app:has(.console) .homebtn { display: none; }
+
+  /* Studio items, Poems and Lives as cards, about 3 across. They scroll normally when long. */
+  .studio-list, .poems-list, .live-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; align-items: stretch; }
+  .studio-list .item, .poems-list .item { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: .8rem .9rem; }
+  .live-grid .live-row { margin-top: 0; height: 100%; align-items: flex-start; }
+
+  /* Home fits on one screen */
+  #app:has(.home) { height: 100dvh; overflow: hidden; }
+  #app:has(.home) #view { overflow: hidden; }
+
+  /* The recap fills one screen: only the segment list and the side panel scroll */
+  #app:has(.console.ended) { height: 100dvh; overflow: hidden; }
+  .console.ended { flex: 1; min-height: 0; padding: 0; display: flex; flex-direction: column; gap: .6rem; }
+  .console.ended > .card { margin-top: 0; flex: none; }
+  .console.ended .c-head { padding: .4rem .7rem; }
+  .console.ended .c-split { flex: 1; min-height: 0; display: block; margin-top: 0; }
+  .console.ended .c-after { height: 100%; min-height: 0; }
+  .console.ended .c-recap { height: 100%; display: flex; flex-direction: column; min-height: 0; padding: .6rem .8rem; }
+  .console.ended .rc-main { flex: 1; min-height: 0; }
+  .console.ended .rc-clips { max-height: 80px; }
+}

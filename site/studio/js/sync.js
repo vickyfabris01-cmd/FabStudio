@@ -12,7 +12,9 @@ const T = {
   tunes:    { remote: 'tunes',           fields: ['id','title','mime','duration','r2Key','rightsNote','createdAt','updatedAt','deletedAt'] },
   captures: { remote: 'idea_captures',   fields: ['id','poemId','mime','duration','r2Key','createdAt','updatedAt','deletedAt'] },
   bakes:    { remote: 'bakes',           fields: ['id','poemId','captureId','tuneId','tuneVolume','mime','duration','r2Key','createdAt','updatedAt','deletedAt'] },
-  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'] },
+  // sourceLiveId is sent only when it has a value (a post made from a live recap), so every other item keeps working
+  // even before migration 007 has been run.
+  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'], optional: ['sourceLiveId'] },
 };
 // Files that belong to each row: which field holds the file, its R2 key, and its "still to upload" flag.
 const FILE = { blob: 'blob', key: 'r2Key', pending: 'blobPending' };
@@ -28,8 +30,14 @@ const BLOBS = {
 };
 const ORDER = ['poems', 'tunes', 'captures', 'bakes', 'items'];
 const snake = (k) => k.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
-const toRemote = (row, fields) => Object.fromEntries(fields.map((f) => [snake(f), row[f] ?? null]));
-const fromRemote = (r, fields) => Object.fromEntries(fields.map((f) => [f, r[snake(f)] ?? null]));
+const toRemote = (row, fields, optional = []) => ({
+  ...Object.fromEntries(fields.map((f) => [snake(f), row[f] ?? null])),
+  ...Object.fromEntries(optional.filter((f) => row[f] != null).map((f) => [snake(f), row[f]])),
+});
+const fromRemote = (r, fields, optional = []) => ({
+  ...Object.fromEntries(fields.map((f) => [f, r[snake(f)] ?? null])),
+  ...Object.fromEntries(optional.filter((f) => r[snake(f)] != null).map((f) => [f, r[snake(f)]])),
+});
 
 let running = false;
 let timer = null;
@@ -96,7 +104,7 @@ async function pushTable(name) {
       }
       step = 'save row to Supabase';
       const fresh = await table.get(r.id);
-      const { error } = await sb.from(cfg.remote).upsert(toRemote(fresh, cfg.fields), { onConflict: 'id' });
+      const { error } = await sb.from(cfg.remote).upsert(toRemote(fresh, cfg.fields, cfg.optional), { onConflict: 'id' });
       if (error) throw error;
       // Clear the flag only if the row was not edited while we were uploading.
       await table.where('id').equals(r.id).and((x) => x.updatedAt === fresh.updatedAt)
@@ -128,7 +136,7 @@ async function pullTable(name) {
       if (!data.length) break;
       step = 'save locally';
       for (const rr of data) {
-        const row = fromRemote(rr, cfg.fields);
+        const row = fromRemote(rr, cfg.fields, cfg.optional);
         const local = await table.get(row.id);
         if (!local || (!local.dirty && newer(row.updatedAt, local.updatedAt))) {
           const merged = { ...(local || {}), ...row, dirty: 0 };

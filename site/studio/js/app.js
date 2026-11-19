@@ -8,16 +8,23 @@ import { h, fmtDur, fmtSize, fmtDate, extFor, toast, probeDuration, playButton, 
 import { publishListView, itemView } from './publish.js';
 import { bakerView, openBakeModal } from './baker.js';
 import { liveListView, liveConsoleView } from './live.js';
+import { homeView } from './home.js';
+import { performanceView } from './performance.js';
 import { engine } from './live-engine.js';
-import { folderSupported, getFolder, pickFolder, forgetFolder, folderAllowed } from './console/myaudio.js';
+import { folderSupported, listFolders, addFolder, removeFolder, folderAllowed } from './console/myaudio.js';
 
 const app = document.getElementById('app');
-const state = { tab: 'poems', poemId: null, itemId: null, prefill: {}, bake: null, liveId: null };
+// On a laptop (900px and wider) the app opens on the Home page and has no sidebar: Home, the "‹ Home" button and
+// the brand name lead to the other pages. On a phone nothing changes: the bottom tabs stay.
+const wide = window.matchMedia('(min-width: 900px)');
+const isLaptop = () => wide.matches;
+const state = { tab: isLaptop() ? 'home' : 'poems', poemId: null, itemId: null, prefill: {}, bake: null, liveId: null };
 let viewToken = 0;
 let editorFlush = null;
 let disposeView = null;
 let paintPill = null;
 let lastSeenSync = null;
+let homeBtn = null;
 
 const prefs = () => {
   try { return { raw: false, ...JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}') }; }
@@ -58,6 +65,9 @@ async function migrateLooseRecordings() {
   if (loose.length) syncSoon();
 }
 
+// A window made narrower than 900px while on Home or Performance (which have no phone tab) goes to Poems.
+wide.addEventListener?.('change', () => { if (!isLaptop() && (state.tab === 'home' || state.tab === 'performance') && !isRecording()) goTab('poems'); });
+
 /* ---------- boot ---------- */
 async function boot() {
   if ('serviceWorker' in navigator) {
@@ -97,9 +107,10 @@ function syncText(s) {
 
 function renderShell() {
   const pill = h('button', { class: 'pill', onclick: () => goTab('settings') });
+  homeBtn = h('button', { class: 'homebtn', type: 'button', hidden: true, onclick: () => goTab('home') }, '‹ Home');
   const tabs = [['studio', 'Studio'], ['poems', 'Poems'], ['live', 'Live'], ['settings', 'Settings']];
   app.replaceChildren(
-    h('header', { class: 'bar' }, h('span', { class: 'brand' }, 'FabStudio'), h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
+    h('header', { class: 'bar' }, h('span', { class: 'brand', onclick: () => { if (isLaptop()) goTab('home'); } }, 'FabStudio'), homeBtn, h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
     h('main', { id: 'view' }),
     h('nav', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, 'aria-label': l, onclick: () => goTab(k) }, tabIcon(k), h('span', {}, l)))),
   );
@@ -151,7 +162,7 @@ const nav = {
 
 async function renderView() {
   const token = ++viewToken;
-  const builders = { poems: poemsView, studio: () => publishListView(nav), live: () => liveListView(nav), settings: settingsView };
+  const builders = { poems: poemsView, studio: () => publishListView(nav), live: () => liveListView(nav), settings: settingsView, home: () => homeView(goTab), performance: () => performanceView(nav) };
   const view = state.tab === 'live' && state.liveId ? await liveConsoleView(state.liveId, nav)
     : state.poemId ? await editorView(state.poemId)
     : state.bake ? await bakerView({ poemId: state.bake.poemId, nav })
@@ -163,6 +174,7 @@ async function renderView() {
   editorFlush = view._flush || null;
   document.body.classList.toggle('baking', !!state.bake?.poemId);
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === state.tab));
+  if (homeBtn) homeBtn.hidden = state.tab === 'home';   // shown on laptops only (CSS)
   document.getElementById('view').replaceChildren(view);
   window.scrollTo(0, 0);
   recordNav();
@@ -335,7 +347,7 @@ async function poemsView() {
   return h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Poems')),
     rows.length
-      ? h('ul', { class: 'list' }, rows.map((p) => {
+      ? h('ul', { class: 'list poems-list' }, rows.map((p) => {
           const more = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Poem actions' }, dotsIcon());
           more.onclick = (e) => {
             e.stopPropagation();
@@ -568,16 +580,20 @@ async function settingsView() {
         } }, 'Sign in'))
     : null;
 
-  // The laptop folder for live audio files. Files are read in place; only the browser's handle is kept.
-  const folder = await getFolder();
-  const folderOk = folder ? await folderAllowed(folder) : false;
-  const folderPanel = h('div', { class: 'panel' }, h('h3', {}, 'Audio files folder'),
+  // The laptop folders for live audio files (the same list as the Music dropdown in the live console).
+  // Files are read in place; only the browser's handle to each folder is kept.
+  const folders = await listFolders();
+  const allowed = new Map();
+  for (const f of folders) allowed.set(f.id, await folderAllowed(f.handle));
+  const folderRows = folders.map((f) => h('div', { class: 'row folder-row' },
+    h('span', { class: 'grow' }, f.name, allowed.get(f.id) ? '' : h('span', { class: 'muted small' }, ' (needs Allow)')),
+    allowed.get(f.id) ? null : h('button', { class: 'btn small', type: 'button', onclick: async () => { await folderAllowed(f.handle, true); renderView(); } }, 'Allow'),
+    h('button', { class: 'btn small danger', type: 'button', onclick: async () => { if (window.confirm(`Remove "${f.name}" from this list? The files are not touched.`)) { await removeFolder(f.id); renderView(); } } }, 'Remove')));
+  const folderPanel = h('div', { class: 'panel' }, h('h3', {}, 'Audio folders'),
     !folderSupported() ? h('p', { class: 'muted small' }, 'Choosing a folder needs Chrome or Edge on a laptop.')
-      : [h('p', {}, folder ? `${folder.name}${folderOk ? '' : ' (needs Allow)'}` : 'No folder chosen yet.'),
-        h('div', { class: 'row' },
-          h('button', { class: 'btn', type: 'button', onclick: async () => { try { await pickFolder(); renderView(); } catch { /* cancelled */ } } }, folder ? 'Change folder' : 'Browse folder'),
-          folder ? h('button', { class: 'btn danger', type: 'button', onclick: async () => { await forgetFolder(); renderView(); } }, 'Forget') : null),
-        h('p', { class: 'muted small' }, 'Files are read in place and never copied or moved. After the browser restarts, tap Allow once in the live console (My audio tab).')]);
+      : [folders.length ? h('div', {}, ...folderRows) : h('p', {}, 'No folder chosen yet.'),
+        h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: async () => { try { await addFolder(); renderView(); } catch { /* cancelled */ } } }, folders.length ? 'Add folder' : 'Browse folder')),
+        h('p', { class: 'muted small' }, 'Files are read in place and never copied or moved. After the browser restarts, tap Allow once for each folder (here, or in the live console Music list).')]);
 
   const pct = est?.quota ? Math.min(100, Math.round((est.usage / est.quota) * 100)) : 0;
   return h('section', { class: 'view' },

@@ -8,14 +8,39 @@ import { deck } from './deck.js';
 const EXT = /\.(mp3|m4a|aac|wav|flac|ogg|oga|opus|webm)$/i;
 
 export const folderSupported = () => typeof window !== 'undefined' && 'showDirectoryPicker' in window;
-export async function getFolder() { try { return (await db.meta.get('audioFolder'))?.handle || null; } catch { return null; } }
-export async function forgetFolder() { await db.meta.delete('audioFolder'); }
 
-export async function pickFolder() {
-  const handle = await window.showDirectoryPicker({ id: 'fabstudio-audio', mode: 'read' });
-  await db.meta.put({ key: 'audioFolder', handle });
-  return handle;
+// Several folders can be saved. They live in one list under db.meta 'audioFolders': [{ id, name, handle }].
+// (Earlier versions kept one folder under 'audioFolder'; it is moved into the list the first time.)
+const FOLDERS = 'audioFolders';
+export const fileKey = (folderId, path) => `${folderId}:${path}`;   // the Deck's key for a file, so two folders can hold the same file name
+
+export async function listFolders() {
+  try {
+    const saved = (await db.meta.get(FOLDERS))?.list;
+    if (Array.isArray(saved)) return saved;
+    const old = (await db.meta.get('audioFolder'))?.handle;
+    const list = old ? [{ id: crypto.randomUUID(), name: old.name || 'Folder', handle: old }] : [];
+    if (list.length) { await db.meta.put({ key: FOLDERS, list }); await db.meta.delete('audioFolder'); }
+    return list;
+  } catch { return []; }
 }
+async function saveFolders(list) { await db.meta.put({ key: FOLDERS, list }); }
+
+// Opens the browser's folder picker and saves the folder. Picking the same folder again just returns it.
+export async function addFolder() {
+  const handle = await window.showDirectoryPicker({ id: 'fabstudio-audio', mode: 'read' });
+  const list = await listFolders();
+  for (const f of list) { try { if (await f.handle.isSameEntry(handle)) return f; } catch { /* compare failed, treat as different */ } }
+  const folder = { id: crypto.randomUUID(), name: handle.name || 'Folder', handle };
+  await saveFolders([...list, folder]);
+  return folder;
+}
+export async function removeFolder(id) { await saveFolders((await listFolders()).filter((f) => f.id !== id)); }
+
+// Single-folder calls from before, kept so nothing that still uses them breaks (they work on the first folder).
+export async function getFolder() { return (await listFolders())[0]?.handle || null; }
+export async function forgetFolder() { await saveFolders([]); }
+export async function pickFolder() { return (await addFolder()).handle; }
 
 // true when reading is allowed. With ask = true it shows the browser's prompt (must come from a tap).
 export async function folderAllowed(handle, ask = false) {

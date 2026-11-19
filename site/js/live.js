@@ -14,6 +14,8 @@ const VOL = '<path d="M15 8a5 5 0 0 1 0 8"/><path d="M17.7 5a9 9 0 0 1 0 14"/><p
 const MUTE = '<path d="M15 8a5 5 0 0 1 1.912 4.934m-1.377 2.602a5 5 0 0 1 -.535 .464"/><path d="M17.7 5a9 9 0 0 1 2.362 11.086m-1.676 2.299a9 9 0 0 1 -.686 .615"/><path d="M9.069 5.054l.431 -.554a.8 .8 0 0 1 1.5 .5v2m0 4v8a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l1.294 -1.664"/><path d="M3 3l18 18"/>';
 const EYE = '<path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/>';
 const SEND = '<path d="M10 14l11 -11"/><path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5"/>';
+const LIKE = '<path d="M7 11v8a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-7a1 1 0 0 1 1 -1h3a4 4 0 0 0 4 -4v-1a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 2 0 0 1 -2 2h-7a3 3 0 0 1 -3 -3"/>';
+const COMMENT = '<path d="M3 20l1.3 -3.9a9 8 0 1 1 3.4 2.9l-4.7 1"/>';
 const CHEV = '<path d="M6 9l6 6l6 -6"/>';
 const id = new URLSearchParams(location.search).get('id') || '';
 const root = document.getElementById('live');
@@ -94,27 +96,24 @@ async function main() {
 
   const feed = h('div', { class: 'l-feed', role: 'log', 'aria-live': 'polite' });
 
-  // after the live: the counts, and two published poems to listen to while the recap is being prepared
-  const stats = h('div', { class: 'l-stats', hidden: true });
-  const waitBox = h('div', { class: 'l-wait', hidden: true });
-  const wait = { items: null, loading: false, audio: null, playing: null, key: '' };
-  async function loadWait() {
-    if (wait.items || wait.loading) return;
-    wait.loading = true;
-    try {
-      const all = (await data.listItems()).filter((x) => x.id !== id && x.public_media_key);
-      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-      wait.items = all.slice(0, 2);
-    } catch { wait.items = []; }
-    wait.loading = false; paint();
-  }
-  function playWait(it) {
-    if (wait.playing === it.id) { wait.audio?.pause(); wait.playing = null; return paint(); }
-    wait.audio?.pause();
-    const a = new Audio(data.mediaUrl(it.public_media_key));
-    a.ontimeupdate = () => { const bar = waitBox.querySelector(`[data-bar="${it.id}"]`); if (bar && a.duration) bar.style.width = `${Math.min(100, (a.currentTime / a.duration) * 100)}%`; };
-    a.onended = () => { wait.playing = null; paint(); };
-    a.play().then(() => { wait.audio = a; wait.playing = it.id; paint(); }).catch(() => toast('Could not play this one.'));
+  // after the live: a thank-you, then four random regular posts. Viewers see no counts of the live itself.
+  const moreBox = h('div', { class: 'l-more', hidden: true });
+  const more = { items: null, loading: false };
+  async function loadMore() {
+    if (more.items || more.loading) return;
+    more.loading = true;
+    try { more.items = await data.listRandomPosts(id, 4); } catch { more.items = []; }
+    more.loading = false;
+    const card = (it) => {
+      const t = data.mediaUrl(it.public_thumb_key);
+      return h('a', { class: 'mini', href: `/poem/?id=${it.id}` },
+        h('div', { class: 'th' }, t ? h('img', { src: t, alt: '', loading: 'lazy' }) : null),
+        h('div', { class: 'mini-t' }, it.title || 'Untitled'),
+        h('div', { class: 'mini-ct' },
+          h('span', {}, svg(EYE), String(it.n_views ?? 0)), h('span', {}, svg(LIKE), String(it.n_like ?? 0)), h('span', {}, svg(COMMENT), String(it.n_comments ?? 0))));
+    };
+    moreBox.replaceChildren(...(more.items.length ? [h('h2', {}, 'More from Fabris'), h('div', { class: 'mini-grid l-2x2' }, ...more.items.map(card))] : []));
+    paint();
   }
   const gate = h('div', { class: 'l-panel l-gate', hidden: true });
 
@@ -126,7 +125,7 @@ async function main() {
   const bubbles = h('div', { class: 'l-bubbles', 'aria-hidden': 'true' });
   const dock = h('div', { class: 'l-dock', hidden: true }, bubbles, h('div', { class: 'l-dockin' }, loveBtn, h('div', { class: 'l-box' }, modeChip, chatIn), sendBtn));
 
-  root.replaceChildren(stage, audio, before, pills, gate, note, feed, waitBox, stats);
+  root.replaceChildren(stage, audio, before, pills, gate, note, feed, moreBox);
   document.body.append(dock);
 
   const els = { q: h('div', { class: 'l-q-ind' }) };
@@ -191,7 +190,7 @@ async function main() {
     if (S.listening && a.online && a.epoch !== S.epoch && S.epoch !== -1) relisten();
     S.epoch = a.epoch;
   }
-  addEventListener('pagehide', () => { stopListen(); wait.audio?.pause(); });
+  addEventListener('pagehide', () => { stopListen(); });
   function paintQ() { const q = els.q; q.textContent = S.q ? { good: 'Audio: good', fair: 'Audio: some stutter', poor: 'Audio: poor connection', stalled: 'Audio: no data' }[S.q.quality] : ''; q.className = 'l-q-ind ' + (S.q?.quality || ''); }
 
   /* ----- Like is a toggle kept in the database; Love is a burst of taps carried by the room ----- */
@@ -318,10 +317,7 @@ async function main() {
     stage.classList.toggle('is-live', live);
     if (blocked) over.replaceChildren();
     else if (ended) {
-      const ready = !!S.row.public_media_key;
-      over.replaceChildren(...(ready
-        ? [h('p', { class: 'l-big' }, 'This live has ended. The replay is ready.'), h('a', { class: 'l-btn', href: `/poem/?id=${id}` }, 'Watch the replay')]
-        : [h('p', { class: 'l-big' }, 'Live recap will be available soon'), h('p', { class: 'l-meta' }, `Thanks for listening to ${S.room?.title || S.row.title}`)]));
+      over.replaceChildren(h('p', { class: 'l-big' }, `Thank you for listening to ${S.room?.title || S.row.title}`), h('p', { class: 'l-meta' }, 'This live has ended. Join me for the next live.'));
     } else if (!live) {
       const c = countdownText();
       over.replaceChildren(...[
@@ -396,26 +392,9 @@ async function main() {
       feedKey = fk;
     }
 
-    // after the live: counts, and (until the replay is published) two poems to listen to meanwhile
-    const ready = ended && !!S.row.public_media_key;
-    stats.hidden = !ended || blocked;
-    if (ended) {
-      stats.replaceChildren(h('span', { class: 'l-pill' }, svg(EYE), h('b', {}, String(S.row.n_views ?? 0))),
-        h('span', { class: 'l-pill love' }, svg(LOVE), h('b', {}, String(S.row.n_love ?? 0))),
-        h('span', { class: 'grow' }), h('a', { class: 'l-link', href: '/' }, 'More poems'));
-    }
-    waitBox.hidden = !ended || ready || blocked;
-    if (ended && !ready) {
-      loadWait();
-      const wk = (wait.items || []).map((x) => x.id).join() + '|' + wait.playing;
-      if (wk !== wait.key) {
-        wait.key = wk;
-        waitBox.replaceChildren(...((wait.items || []).length ? [h('h2', {}, 'While you wait'), ...wait.items.map((it) => h('div', { class: 'l-witem' },
-          h('button', { class: 'l-round', type: 'button', 'aria-label': wait.playing === it.id ? 'Pause' : 'Play', onclick: () => playWait(it) }, wait.playing === it.id ? '❚❚' : '▶'),
-          h('div', { class: 'grow' }, h('div', { class: 'l-wtitle' }, it.title || 'Untitled'), h('div', { class: 'l-wbar' }, h('i', { 'data-bar': it.id }))),
-          h('span', { class: 'l-meta' }, it.duration ? `${Math.floor(it.duration / 60)}:${String(Math.round(it.duration % 60)).padStart(2, '0')}` : '')))] : []));
-      }
-    } else if (wait.audio) { wait.audio.pause(); wait.audio = null; wait.playing = null; wait.key = ''; }
+    // after the live: four random posts under the thank-you
+    moreBox.hidden = !ended || blocked || !(more.items || []).length;
+    if (ended && !blocked) loadMore();
 
     // the message box (never before the live starts, never after it ends)
     const chatOn = settings.chatEnabled !== false;

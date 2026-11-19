@@ -2,7 +2,7 @@
 import { sb } from '../../shared/supabase.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../../shared/live-settings.js';
 import { db, uid, now } from './db.js';
-import { h, fmtDur, fmtAgo, toast, openModal } from './ui.js';
+import { h, fmtDur, fmtAgo, toast, openModal, eyeIcon, loveIcon, commentIcon } from './ui.js';
 import { engine } from './live-engine.js';
 import { listInputs } from './live-audio.js';
 import { deck, listOutputs, canChooseOutput } from './console/deck.js';
@@ -13,8 +13,6 @@ import { chatPane } from './console/chatfeed.js';
 import { sourceControl } from './console/source.js';
 import { settingsList, openSettingsModal } from './console/settings-modal.js';
 import { recapPane } from './console/recap.js';
-import { uploadBlob, liveAssets } from './api.js';
-import { thumbFromTitle } from './thumbs.js';
 import { syncAndWait } from './sync.js';
 
 const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
@@ -60,11 +58,20 @@ function newLiveModal(nav) {
 }
 
 /* ---------- list ---------- */
+// Views, peak watching, Love and chat count of one live. A number that is not saved is simply left out.
+export function liveStats({ views, peak, love, chats }) {
+  const bits = [];
+  if (views != null) bits.push(h('span', { title: 'Views' }, eyeIcon(14), h('b', {}, String(views))));
+  if (peak != null) bits.push(h('span', { title: 'Peak watching' }, h('span', { class: 'stat-live', 'aria-hidden': 'true' }), h('b', {}, String(peak)), ' peak'));
+  if (love != null) bits.push(h('span', { title: 'Love', class: 'is-love' }, loveIcon(14), h('b', {}, String(love))));
+  if (chats != null) bits.push(h('span', { title: 'Chat messages' }, commentIcon(14), h('b', {}, String(chats))));
+  return bits.length ? h('div', { class: 'stats live-stats' }, bits) : null;
+}
 export async function liveListView(nav) {
   const wrap = h('div', { class: 'live-list' });
   wrap.append(h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Live'), h('button', { class: 'btn primary', type: 'button', onclick: () => newLiveModal(nav) }, 'New live')));
   if (engine.active) wrap.append(h('button', { class: 'btn rec live', type: 'button', style: 'width:100%;margin:.8rem 0', onclick: () => nav.openLive(engine.s.itemId) }, '● On air: open the console'));
-  const body = h('div', {}, h('p', { class: 'muted' }, navigator.onLine ? 'Loading…' : 'Live sessions need internet.'));
+  const body = h('div', { class: 'live-grid' }, h('p', { class: 'muted' }, navigator.onLine ? 'Loading…' : 'Live sessions need internet.'));
   wrap.append(body);
   if (navigator.onLine) {
     try {
@@ -72,13 +79,22 @@ export async function liveListView(nav) {
       if (error) throw error;
       const { data: items } = await sb.from('published_items').select('id,title,public_media_key').in('id', (rows || []).map((r) => r.item_id));
       const by = new Map((items || []).map((i) => [i.id, i]));
+      // The numbers on each card come from saved data: views (counters), Love and chats (live_totals, migration 007), peak (live_sessions).
+      const ids = (rows || []).map((r) => r.item_id);
+      const [cnt, tot] = await Promise.all([
+        ids.length ? sb.from('counters').select('item_id,n_views').in('item_id', ids).then((r) => r.data || [], () => []) : [],
+        sb.rpc('live_totals').then((r) => (r.error ? [] : r.data || []), () => []),
+      ]);
+      const views = new Map(cnt.map((c) => [c.item_id, c.n_views || 0]));
+      const totals = new Map(tot.map((t) => [t.item_id, t]));
       body.replaceChildren();
       if (!rows?.length) body.append(h('p', { class: 'muted' }, 'No lives yet. Create one, then open it on your laptop to go live.'));
       for (const r of rows || []) {
         const it = by.get(r.item_id) || {};
         const label = r.state === 'live' ? 'On air' : r.state === 'ended' ? (it.public_media_key ? 'Replay published' : 'Ended') : r.starts_at ? `Planned ${new Date(r.starts_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : 'Not started';
         body.append(h('button', { class: 'live-row', type: 'button', onclick: () => nav.openLive(r.item_id) },
-          h('div', { class: 'grow' }, h('b', {}, it.title || 'Untitled'), h('div', { class: 'small muted' }, label + (r.peak_viewers ? ` · peak ${r.peak_viewers}` : ''))),
+          h('div', { class: 'grow' }, h('b', {}, it.title || 'Untitled'), h('div', { class: 'small muted' }, label + (r.state === 'ended' && r.started_at ? ` · ${new Date(r.started_at).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}` : '')),
+            r.state !== 'live' && r.state !== 'ended' ? null : liveStats({ views: views.get(r.item_id), peak: r.peak_viewers, love: totals.get(r.item_id)?.love, chats: totals.get(r.item_id)?.chats })),
           h('span', { class: 'badge', 'data-status': r.state === 'live' ? 'published' : '' }, r.state)));
       }
     } catch (e) { body.replaceChildren(h('p', { class: 'error' }, 'Could not load: ' + (e.message || e) + '. Did you run migrations 005_live.sql and 006_live_part1.sql?')); }
@@ -180,7 +196,6 @@ export async function liveConsoleView(itemId, nav) {
       recap = await recapPane({
         engine, itemId, cap, title: st.row.title,
         published: async () => { const { data: item } = await sb.from('published_items').select('public_media_key').eq('id', itemId).single(); return !!item?.public_media_key; },
-        publishWhole: (c) => publishReplay(itemId, c, s().row.title),
       });
       afterBox.replaceChildren(recap.el);
       recap.paint();
@@ -196,7 +211,7 @@ export async function liveConsoleView(itemId, nav) {
     const pre = !ended && st.phase !== 'live';
     root.classList.toggle('ended', ended);   // on one screen without scrolling, except for the recap
     header.paint();
-    stats.el.hidden = pre;
+    stats.el.hidden = pre || ended;   // the recap has its own saved numbers
     stats.paint();
     sched.hidden = !pre;
     if (pre) {
@@ -214,6 +229,7 @@ export async function liveConsoleView(itemId, nav) {
     test.hidden = !!engine.audio;
     audioMsg.textContent = localMsg || st.error;
     reading.el.hidden = ended;
+    chat.el.hidden = ended;   // after the live the recap has its own read-only Chats | Viewers panel
     reading.paint();
     chat.paint();
     if (ended) paintAfter();
@@ -230,19 +246,4 @@ export async function liveConsoleView(itemId, nav) {
   header.titleEl.classList.add('bar-title');
   if (topBar) topBar.insertBefore(header.titleEl, topBar.querySelector('.pill'));
   return root;
-}
-
-// Copies the thumbnail and the recording to the public bucket and puts them on the item.
-async function publishReplay(itemId, cap, title) {
-  needNet();
-  if (!cap?.blob && !cap?.r2Key) throw new Error('There is no recording to publish.');
-  const thumbKey = `thumbs/${itemId}.jpg`;
-  const thumb = await thumbFromTitle(title || 'Live');
-  await uploadBlob(thumbKey, thumb);
-  const out = await liveAssets({ itemId, thumbKey, recordingKey: cap.r2Key });
-  const { error } = await sb.from('published_items').update({
-    public_media_key: out.publicMediaKey, public_thumb_key: out.publicThumbKey, media_key: cap.r2Key, thumb_key: thumbKey,
-    mime: cap.mime, duration: cap.duration, status: 'published', updated_at: new Date().toISOString(),
-  }).eq('id', itemId);
-  if (error) throw error;
 }

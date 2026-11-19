@@ -134,3 +134,13 @@ body.has-dock .foot { display: none; }
 .live-title.slide > span { animation: ltitle var(--t, 8s) linear infinite alternate; }
 @keyframes ltitle { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(calc(-1 * var(--d, 0px))); } }
 @media (prefers-reduced-motion: reduce) { .live-title.slide > span { animation: none; } .live-title { text-overflow: ellipsis; -webkit-mask-image: none; mask-image: none; } }
+
+/* ---------- after the live: "More from Fabris", 4 random posts in a 2x2 grid (phones too) ---------- */
+.l-more { margin: 1.3rem 0 .6rem; }
+.l-more[hidden] { display: none; }
+.l-more h2 { font-size: 1rem; margin: 0 0 .6rem; }
+.l-more .mini-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.mini-t { font-size: .9rem; margin: .35rem 0 .1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-ct { display: flex; gap: .7rem; color: var(--muted); font-size: .75rem; }
+.mini-ct span { display: inline-flex; align-items: center; gap: .2rem; }
+.mini-ct svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

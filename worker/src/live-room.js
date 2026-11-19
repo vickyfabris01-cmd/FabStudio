@@ -7,6 +7,8 @@
 // Browsers connect with a WebSocket at /live/ws?item=<id> and first send {t:'hello', token}.
 // Chat is saved to the `comments` table in batches (so it shows under the replay), each person's Love taps are
 // saved to `live_love` on the same schedule, and the request log is saved to live_sessions when the live ends.
+// When the live ends, the list of people who joined (name, join time, messages, Love given) is saved to `live_log`
+// (migration 007). Chat itself is already in `comments` and Love in `live_love`, so neither is copied again.
 // All of that needs the SUPABASE_SERVICE_KEY secret.
 import { DEFAULT_SETTINGS, cleanSettings, publicSettings } from '../../site/shared/live-settings.js';
 
@@ -37,7 +39,7 @@ const fresh = () => ({
   peak: 0,
   requests: [],               // { id, uid, name, kind, text, status, at }. kind is always 'request'.
   love: {},                   // uid -> { name, taps, dirty }  Love taps this live, merged per person
-  joined: {},                 // uid -> 1  people already announced to the host this live
+  joined: {},                 // uid -> { n: name, a: first seen (ms), g: 1 for a guest, m: messages }  (older lives stored 1)
   poems: [],                  // titles of poems with more than 5 stanzas, for the Request list
   show: { on: false, poem: '', playing: '' },   // what viewers may see: poem title and what is playing
 });
@@ -169,9 +171,16 @@ export class LiveRoom {
   noteJoin(att) {
     if (att.owner || this.st.status !== 'live' || this.st.joined[att.uid]) return;
     if (Object.keys(this.st.joined).length >= MAX_JOINED) return;
-    this.st.joined[att.uid] = 1;
+    this.st.joined[att.uid] = { n: att.name, a: Date.now(), g: att.anon ? 1 : 0, m: 0 };
     this.saveSoon();
     this.toHost({ t: 'joined', name: att.name, uid8: att.uid.slice(0, 4) });
+  }
+
+  // Counts a chat message for the viewer log (the room keeps only the last KEEP_CHAT lines, so it cannot be counted from those).
+  countMessage(att) {
+    if (att.owner) return;
+    const j = this.st.joined[att.uid];
+    if (j && typeof j === 'object') { j.m = (j.m || 0) + 1; this.saveSoon(); }
   }
 
   // Counts the view in the database (once per account, same rule as every other item) and tells the host
@@ -403,6 +412,7 @@ export class LiveRoom {
       const msg = { id: crypto.randomUUID(), uid: att.uid, name: att.name, text, at: Date.now(), host: att.owner ? 1 : 0 };
       this.chat.push(msg);
       if (this.chat.length > KEEP_CHAT) this.chat.splice(0, this.chat.length - KEEP_CHAT);
+      this.countMessage(att);
       await this.save();
       const out = { t: 'chat', msg: this.pub(msg) };
       this.each((w, a) => { if (!this.isBlocked(a)) this.send(w, out); });
@@ -592,6 +602,37 @@ export class LiveRoom {
     const log = s.requests.map((r) => ({ name: r.name, kind: 'request', text: r.text, status: r.status, at: r.at }));
     await this.sb('PATCH', `live_sessions?item_id=eq.${s.itemId}`,
       { state: 'ended', ended_at: new Date(s.endedAt).toISOString(), peak_viewers: s.peak, requests: log }, 'return=minimal');
+    await this.saveViewerLog();
+  }
+
+  // The viewer list for the recap: named people with when they joined, how many messages they wrote and how much
+  // Love they gave. Guests only add to the counts. Needs migration 007; if it is not run yet nothing is lost, the
+  // chat and Love are saved anyway and the recap says the viewer details are missing.
+  async saveViewerLog() {
+    const s = this.st;
+    if (!s.itemId) return;
+    const people = [];
+    let anon = 0;
+    let total = 0;
+    const seen = new Set();
+    for (const [uid, j] of Object.entries(s.joined)) {
+      seen.add(uid);
+      total++;
+      const rec = j && typeof j === 'object' ? j : { n: '', a: s.startedAt, g: 0, m: 0 };
+      if (rec.g) { anon++; continue; }
+      people.push({ name: clean(rec.n || 'Viewer', 30), uid8: uid.slice(0, 4), joined_at: new Date(rec.a || s.startedAt || Date.now()).toISOString(), messages: rec.m || 0, love: s.love[uid]?.taps || 0 });
+    }
+    // Someone who sent Love but was never announced (the room restarted, say) still counts, if they have a name.
+    for (const [uid, v] of Object.entries(s.love)) {
+      if (seen.has(uid)) continue;
+      total++;
+      if (/^Guest [0-9a-f]{4}$/.test(v.name || '')) { anon++; continue; }
+      people.push({ name: clean(v.name || 'Viewer', 30), uid8: uid.slice(0, 4), joined_at: null, messages: 0, love: v.taps || 0 });
+    }
+    people.sort((a, b) => String(a.joined_at || '~').localeCompare(String(b.joined_at || '~')));
+    const row = { item_id: s.itemId, saved_at: new Date().toISOString(), viewers: people.slice(0, 2000), total_viewers: total, anon_viewers: anon, love_total: this.loveTotal() };
+    const r = await this.sb('POST', 'live_log?on_conflict=item_id', [row], 'resolution=merge-duplicates,return=minimal');
+    if (r && !r.ok) console.warn('Saving the viewer log failed', r.status);
   }
 
   async gone(ws) {

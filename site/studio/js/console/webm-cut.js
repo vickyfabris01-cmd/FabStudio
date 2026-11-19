@@ -140,15 +140,30 @@ const uintBytes = (v) => { const out = []; do { out.unshift(v % 256); v = Math.f
 const join = (parts) => { const total = parts.reduce((n, a) => n + a.length, 0); const out = new Uint8Array(total); let o = 0; for (const a of parts) { out.set(a, o); o += a.length; } return out; };
 const el = (id, ...kids) => { const body = join(kids); return join([idBytes(id), vintSize(body.length), body]); };
 
-export function cutWebm(index, startMs, endMs) {
+// cutWebm(index, startMs, endMs)            one range (the original call, unchanged)
+// cutWebm(index, [[startMs, endMs], ...])   several ranges, joined in the order given (frames are copied, nothing is
+//                                           re-encoded; there may be a faint click where two pieces meet)
+// Returns { blob, durationMs }.
+export function cutWebm(index, startOrRanges, endMs) {
+  const ranges = Array.isArray(startOrRanges) ? startOrRanges : [[startOrRanges, endMs]];
+  if (!ranges.length) throw new Error('Nothing is left between those two times.');
   const base = index.firstMs;
-  const from = Math.max(0, Math.round(startMs)) + base;
-  const to = Math.min(index.durationMs, Math.round(endMs)) + base;
-  let a = 0; while (a < index.t.length && index.t[a] < from) a++;
-  let b = a; while (b < index.t.length && index.t[b] < to) b++;
-  if (b <= a) throw new Error('Nothing is left between those two times.');
-  const t0 = index.t[a];
-  const durMs = index.t[b - 1] - t0 + 20;
+  // frames to copy, with their new time in the joined file
+  const pick = [];        // frame numbers in the source
+  const newT = [];        // their time in the new file (ms)
+  let acc = 0;
+  for (const [startMs, stopMs] of ranges) {
+    const from = Math.max(0, Math.round(startMs)) + base;
+    const to = Math.min(index.durationMs, Math.round(stopMs)) + base;
+    let a = 0; while (a < index.t.length && index.t[a] < from) a++;
+    let b = a; while (b < index.t.length && index.t[b] < to) b++;
+    if (b <= a) throw new Error('Nothing is left between those two times.');
+    const t0 = index.t[a];
+    for (let k = a; k < b; k++) { pick.push(k); newT.push(acc + index.t[k] - t0); }
+    acc += index.t[b - 1] - t0 + 20;
+  }
+  const durMs = acc;
+  const count = pick.length;
 
   const info = el(ID.INFO, el(ID.TIMESCALE, uintBytes(1000000)), el(0x4d80, enc.encode('FabStudio')), el(0x5741, enc.encode('FabStudio')),
     (() => { const d = new Uint8Array(8); new DataView(d.buffer).setFloat64(0, durMs); return el(0x4489, d); })());
@@ -156,13 +171,14 @@ export function cutWebm(index, startMs, endMs) {
 
   // clusters of about 2 seconds
   const clusters = [];                                     // { tc, bytes }
-  let i = a;
-  while (i < b) {
-    const tc = index.t[i] - t0;
+  let i = 0;
+  while (i < count) {
+    const tc = newT[i];
     const kids = [el(ID.TIMECODE, uintBytes(tc))];
-    while (i < b && index.t[i] - t0 - tc < 2000) {
-      const rel = index.t[i] - t0 - tc;
-      const frame = index.buf.subarray(index.off[i], index.off[i] + index.len[i]);
+    while (i < count && newT[i] - tc < 2000) {
+      const rel = newT[i] - tc;
+      const src = pick[i];
+      const frame = index.buf.subarray(index.off[src], index.off[src] + index.len[src]);
       const head = Uint8Array.of(...tn, (rel >> 8) & 0xff, rel & 0xff, 0x80);
       kids.push(el(ID.SIMPLEBLOCK, head, frame));
       i++;

@@ -94,12 +94,15 @@ export async function createDraftFromFile(kind, file) {
   return id;
 }
 
-// A clip cut from a live recording becomes an ordinary audio item (own title, thumbnail and counters).
-// liveId remembers which live it came from, so the recap can list its clips. It stays on this device.
+// A clip (or the whole recording, or several clips joined) cut from a live recording becomes an ordinary audio
+// item (own title, thumbnail and counters, all starting at zero).
+// liveId remembers which live it came from, so the recap can list its posts (kept on this device).
+// sourceLiveId is the same id saved with the post online, so the public page can leave recap posts out of
+// "More from Fabris".
 export async function createDraftFromClip({ liveId, title, blob, duration }) {
   const thumb = await thumbFromTitle(title);
   const id = crypto.randomUUID();
-  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: blob.type || 'audio/webm', duration, blob, thumb }), liveId });
+  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: blob.type || 'audio/webm', duration, blob, thumb }), liveId, sourceLiveId: liveId || null });
   syncSoon();
   return id;
 }
@@ -155,7 +158,8 @@ async function loadCounters() {
   for (const c of data || []) counterCache.set(c.item_id, c);
 }
 
-const STAT_DEFS = [[eyeIcon, 'n_views', 'Views'], [loveIcon, 'n_love', 'Love'], [likeIcon, 'n_like', 'Like'], [commentIcon, 'n_comments', 'Comments']];
+// Love is no longer shown on posts (its data stays in the database).
+const STAT_DEFS = [[eyeIcon, 'n_views', 'Views'], [likeIcon, 'n_like', 'Like'], [commentIcon, 'n_comments', 'Comments']];
 function statsEl(c) {
   const spans = STAT_DEFS.map(([icon, key, label]) => {
     const n = h('b', {}, '–');

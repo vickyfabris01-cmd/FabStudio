@@ -31,6 +31,7 @@ class Deck extends EventTarget {
   // fn({ source, key, name, fresh }) when something starts (fresh is false when it only resumes), onStop when it pauses or ends.
   onStart(fn) { const f = (e) => fn(e.detail); this.addEventListener('start', f); return () => this.removeEventListener('start', f); }
   onStop(fn) { this.addEventListener('stop', fn); return () => this.removeEventListener('stop', fn); }
+  onEnded(fn) { const f = (e) => fn(e.detail); this.addEventListener('ended', f); return () => this.removeEventListener('ended', f); }
 
   isPlaying(key) { return this.s.playing && (key == null || this.s.key === key); }
   isLoaded(key) { return this.s.key === key && !!this.audio; }
@@ -43,7 +44,7 @@ class Deck extends EventTarget {
     const a = new Audio(url);
     a.preload = 'auto';
     a.volume = this.s.volume;
-    a.onended = () => { this.s.playing = false; this.s.time = 0; this.emit(); this.dispatchEvent(new Event('stop')); };
+    a.onended = () => { const key = this.s.key; this.s.playing = false; this.s.time = 0; this.emit(); this.dispatchEvent(new Event('stop')); this.dispatchEvent(new CustomEvent('ended', { detail: { key } })); };   // 'ended' = it ran to its end (playlist.js uses it to loop)
     a.onerror = () => { this.unload(true); this.s.error = 'This audio could not be played.'; this.emit(); };
     a.onloadedmetadata = () => { this.s.duration = a.duration || 0; this.emit(); };
     this.audio = a; this.url = url; this.started = false;

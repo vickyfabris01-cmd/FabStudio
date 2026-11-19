@@ -15,6 +15,18 @@ export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id'
 // The latest poems other than this one, for "More from Fabris".
 export const listMore = (excludeId) =>
   must(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId).not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(4));
+// Four random regular posts for "More from Fabris" on a live that has ended. Posts made from a live recap and
+// live replays are left out. Picked fresh on every visit. (Before migration 007 there is no source_live_id column
+// and so no recap posts to leave out, which is why the second try drops that filter.)
+export async function listRandomPosts(excludeId, n = 4) {
+  const base = () => sbp.from('items_public').select('id,title,public_thumb_key,n_views,n_like,n_comments').neq('id', excludeId).neq('kind', 'live')
+    .not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(200);
+  let rows;
+  try { rows = await must(base().is('source_live_id', null)); } catch { rows = await must(base()); }
+  rows = [...(rows || [])];
+  for (let i = rows.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rows[i], rows[j]] = [rows[j], rows[i]]; }
+  return rows.slice(0, n);
+}
 export const listComments = (id) =>
   must(sbp.from('comments').select('id,user_id,nickname,body,created_at').eq('item_id', id).order('created_at', { ascending: false }).limit(100));
 
