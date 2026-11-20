@@ -79,6 +79,8 @@ video.player { background: #000; aspect-ratio: 16 / 9; }
 .react .ico { display: inline-flex; }
 .react .n { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .9rem; }
 .react.share { margin-left: auto; padding: .4rem .75rem; }
+.react.dl { margin-left: auto; padding: .4rem .75rem; text-decoration: none; }
+.react.dl + .react.share { margin-left: 0; }
 .react[data-type='like'][aria-pressed='true'] { border-color: var(--text); }
 .react[data-type='like'][aria-pressed='true'] svg { fill: currentColor; }
 .react[data-type='comment'][aria-expanded='true'] { border-color: var(--accent); color: var(--accent); }
@@ -202,3 +204,8 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 .foot-invite b { font-family: var(--serif); font-size: 1.05rem; }
 .foot-invite ul { margin: 0; padding-left: 1.1rem; color: var(--muted); line-height: 1.6; }
 .foot-invite .foot-signin { font-size: .85rem; }
+
+/* Footer: install row, and the iPhone steps */
+.foot-install { flex: 0 0 100%; display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; padding: .8rem 1.1rem; margin: 0 0 .6rem; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; color: var(--text); }
+.foot-install[hidden] { display: none; }
+.ios-steps { margin: .4rem 0 1rem; padding-left: 1.2rem; line-height: 1.7; color: var(--muted); }

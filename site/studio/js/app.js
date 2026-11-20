@@ -652,7 +652,7 @@ async function heroPictures() {
   for (let slot = 1; slot <= 7; slot++) {
     const cur = by.get(slot);
     const set = async () => {
-      const r = await pickThumbnail({ imageOnly: true, heading: `Home picture ${slot}` });
+      const r = await pickThumbnail({ imageOnly: true, guides: true, heading: `Home picture ${slot}` });
       if (!r) return;
       try {
         toast('Uploading…');

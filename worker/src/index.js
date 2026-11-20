@@ -172,6 +172,16 @@ async function servePublic(request, env, key) {
   });
   obj.writeHttpMetadata(h);
   h.set('etag', obj.httpEtag);
+  // ?download=<file name> makes the browser save the file under that name instead of playing it.
+  const dl = new URL(request.url).searchParams.get('download');
+  if (dl) {
+    const name = dl.replace(/[\u0000-\u001f\u007f\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 150);
+    if (name) {
+      const ascii = name.replace(/[^\x20-\x7e]/g, '_');
+      const star = encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+      h.set('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${star}`);
+    }
+  }
   let status = 200;
   if (wantsRange && obj.range) {
     let start;

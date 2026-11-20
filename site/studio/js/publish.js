@@ -9,6 +9,7 @@ import { requestPublish, jobFor, isBusy, onPublishJobs } from './publisher.js';
 import { thumbFromImage, thumbFromTitle, thumbFromVideo } from './thumbs.js';
 import { pickThumbnail } from './thumb-picker.js';
 import { createSelection, selectBar, tickBox } from './select.js';
+import { downloadName, extOf } from '../../shared/dl-name.js';
 import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
 
 // One place to change the upload limits.
@@ -119,6 +120,29 @@ export function publishItemNow(id, title = '') {
 /* ---------- shared actions (used by the list menu and the item page) ---------- */
 const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
 
+// Saves an item's audio or video to this device as "Fabris Poet - <Title>.<ext>". The file comes from this
+// device when it is here, otherwise it is fetched first (that needs internet).
+async function downloadItem(id) {
+  const row = await db.items.get(id);
+  if (!row) return false;
+  let blob = row.blob;
+  if (!blob) {
+    needNet();
+    toast('Getting the file…');
+    blob = await fetchMedia(row.mediaKey);
+    await db.items.update(id, { blob });
+  }
+  const name = downloadName(row.title, extOf({ key: row.mediaKey, mime: row.mime }));
+  const url = URL.createObjectURL(blob);
+  const a = h('a', { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  toast('Downloading ' + name);
+  return false;   // nothing in the list changed
+}
+
 async function copyLink(id) {
   const link = `${location.origin}/p/${id}`;
   try { await navigator.clipboard.writeText(link); toast('Link copied.'); } catch { toast(link); }
@@ -224,7 +248,7 @@ export async function publishListView(nav) {
     onMode: () => nav.refresh(),
     onDelete: async () => { const ids = [...picked.ids]; if (await deleteItemsFlow(ids).catch((e) => { toast(e.message || String(e)); return false; })) { picked.on = false; picked.ids.clear(); nav.refresh(); } },
   });
-  // The three-dot menu of a card: Edit, Open, Copy link and Unpublish (when published), Delete.
+  // The three-dot menu of a card: Edit, Open, Download, Copy link and Unpublish (when published), Delete.
   const menuFor = (r) => {
     const dots = h('button', {
       class: 'iconbtn', type: 'button', 'aria-label': 'More',
@@ -233,6 +257,7 @@ export async function publishListView(nav) {
         popMenu(dots, [
           { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
           { label: 'Open', onclick: () => nav.open(r.id) },
+          { label: 'Download', onclick: () => act(() => downloadItem(r.id)) },
           ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, { label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }] : []),
           { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
         ]);
@@ -733,7 +758,7 @@ async function existingView(first, nav) {
   put(root,
     h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio'),
       h('button', { class: 'btn small primary', type: 'button', onclick: openEdit }, 'Edit')),
-    titleBox, wrap, h('div', { class: 'row' }, thumbEdit), status, descBox,
+    titleBox, wrap, h('div', { class: 'row' }, thumbEdit, h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await downloadItem(id); } catch (e) { toast(e.message || String(e)); } } }, 'Download')), status, descBox,
     published() ? statRow : null,
     progressSlot, actions, commentsBox);
 

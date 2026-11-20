@@ -4,6 +4,7 @@ import { h, fmtDur, fmtAgo, fmtWhen, toast } from '../shared/dom.js';
 import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady, displayName } from './auth-ui.js';
 import * as data from './data.js';
 import { maybeInvite } from './invite.js';
+import { downloadName, extOf } from '../shared/dl-name.js';
 
 const svg = (inner, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="${cls}">${inner}</svg>`;
 const ICON = {
@@ -12,6 +13,7 @@ const ICON = {
   comment: svg('<path d="M3 20l1.3 -3.9a9 8 0 1 1 3.4 2.9l-4.7 1"/>'),
   share: svg('<path d="M6 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 6m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 18m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M8.7 10.7l6.6 -3.4"/><path d="M8.7 13.3l6.6 3.4"/>'),
   send: svg('<path d="M10 14l11 -11"/><path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5"/>'),
+  download: svg('<path d="M12 4v11"/><path d="M7.5 11l4.5 4.5l4.5 -4.5"/><path d="M5 19h14"/>'),
   play: svg('<path d="M8 5v14l11 -7z"/>', 'solid'),
   pause: svg('<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>', 'solid'),
 };
@@ -295,6 +297,10 @@ async function main() {
     try { await navigator.clipboard.writeText(url); toast('Link copied.'); } catch { toast(url); }
   } }, icon('share'));
 
+  // Download: the Worker sends the file with a Content-Disposition, so the browser saves it under the name we give.
+  const dlName = downloadName(item.title, extOf({ key: item.public_media_key, mime: item.mime }));
+  const dlBtn = h('a', { class: 'react dl', href: `${src}${src.includes('?') ? '&' : '?'}download=${encodeURIComponent(dlName)}`, download: dlName, 'aria-label': 'Download', title: 'Download' }, icon('download'));
+
   const titleText = h('h1', {}, item.title);
   const titleBox = h('div', { class: 'ttl' }, titleText);
   const description = (item.description || '').trim() ? descBlock(item.description.trim()) : null;
@@ -305,7 +311,7 @@ async function main() {
     media,
     h('p', { class: 'meta' }, fmtAgo(item.published_at), ' · ', views),
     description ? description.el : null,
-    h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, likeBtn, comBtn, shareBtn),
+    h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, likeBtn, comBtn, dlBtn, shareBtn),
     h('section', { class: 'comments-box' }, h('h2', { class: 'sr' }, 'Comments'), preview, panel),
     moreBox,
   ].filter(Boolean));
