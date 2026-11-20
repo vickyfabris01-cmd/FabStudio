@@ -206,6 +206,7 @@ const statusText = (r) => (r.status === 'published'
 /* ---------- list (the Studio tab) ---------- */
 let listFilter = 'all';
 const picked = createSelection();   // Select mode of the Studio list
+let editNext = null;                // set by a card's Edit: the item page then opens its edit form straight away
 
 export async function publishListView(nav) {
   const all = (await db.items.toArray()).filter((r) => r.kind !== 'live').sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
@@ -223,13 +224,14 @@ export async function publishListView(nav) {
     onMode: () => nav.refresh(),
     onDelete: async () => { const ids = [...picked.ids]; if (await deleteItemsFlow(ids).catch((e) => { toast(e.message || String(e)); return false; })) { picked.on = false; picked.ids.clear(); nav.refresh(); } },
   });
-  // The three-dot menu of a card: Open, Copy link and Unpublish (when published), Delete.
+  // The three-dot menu of a card: Edit, Open, Copy link and Unpublish (when published), Delete.
   const menuFor = (r) => {
     const dots = h('button', {
       class: 'iconbtn', type: 'button', 'aria-label': 'More',
       onclick: (e) => {
         e.stopPropagation();
         popMenu(dots, [
+          { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
           { label: 'Open', onclick: () => nav.open(r.id) },
           ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, { label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }] : []),
           { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
@@ -497,6 +499,39 @@ async function existingView(first, nav) {
     input.select();
   }
 
+  /* one Edit form for the title, the description and the thumbnail (the pens below still work too) */
+  function openEdit() {
+    const ti = h('input', { value: item.title || '', 'aria-label': 'Title', maxlength: 120 });
+    const ta = h('textarea', { rows: 5, 'aria-label': 'Description', placeholder: 'Short description (optional)', maxlength: 1000 });
+    ta.value = item.description || '';
+    const save = h('button', { class: 'btn primary', type: 'button' }, 'Save');
+    const cancel = h('button', { class: 'btn', type: 'button' }, 'Cancel');
+    const thumbBtn = h('button', { class: 'btn', type: 'button', onclick: () => thumbEdit.onclick() }, 'Change thumbnail');
+    const m = openModal(h('h3', {}, 'Edit'),
+      h('label', {}, h('span', { class: 'muted small' }, 'Title'), ti),
+      h('label', {}, h('span', { class: 'muted small' }, 'Description'), ta),
+      h('div', { class: 'row' }, thumbBtn),
+      h('div', { class: 'row' }, h('span', { class: 'grow' }), cancel, save));
+    cancel.onclick = () => m.close();
+    save.onclick = async () => {
+      const t = ti.value.trim();
+      const d = ta.value.trim();
+      if (!t) return toast('Give it a title.');
+      save.disabled = true;
+      try {
+        if (d !== (item.description || '')) {
+          await db.items.update(id, { description: d, updatedAt: now(), dirty: 1 });
+          item = await db.items.get(id);
+          syncSoon();
+          paintDesc();
+        }
+        if (t !== (item.title || '')) await changeTitle(t); else { paintStatus(); toast('Saved.'); }
+        m.close();
+      } catch (e) { toast(e.message || String(e)); save.disabled = false; }
+    };
+    ti.focus();
+  }
+
   /* picture, with play (audio gets a seek bar, video plays in place) */
   const img = h('img', { class: 'cover', alt: 'Thumbnail' });
   const noThumb = h('div', { class: 'cover ph' });
@@ -696,7 +731,8 @@ async function existingView(first, nav) {
   paintProgress();
   paintActions();
   put(root,
-    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio')),
+    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio'),
+      h('button', { class: 'btn small primary', type: 'button', onclick: openEdit }, 'Edit')),
     titleBox, wrap, h('div', { class: 'row' }, thumbEdit), status, descBox,
     published() ? statRow : null,
     progressSlot, actions, commentsBox);
@@ -707,6 +743,7 @@ async function existingView(first, nav) {
     paintProgress();
   }));
 
+  if (editNext === id) { editNext = null; setTimeout(openEdit, 0); }
   if (published()) loadNumbers();
   async function loadNumbers() {
     if (!navigator.onLine) return;

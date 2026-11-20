@@ -57,9 +57,50 @@ async function deletePoem(id) {
   await softDelete('poems', id);
 }
 
+// Recordings made during a live belong to that live (its recap reads them). They are not poems, so they are
+// never turned into one. The live sessions say which captures they are; the answer is kept for offline starts.
+// Returns null when it cannot be known yet (offline and never fetched).
+async function liveCaptureIds() {
+  const KEY = 'fabstudio.livecaps';
+  const ids = new Set();
+  let known = false;
+  try { const raw = localStorage.getItem(KEY); if (raw !== null) { known = true; JSON.parse(raw).forEach((x) => ids.add(x)); } } catch { /* start fresh */ }
+  if (navigator.onLine) {
+    try {
+      const { data, error } = await sb.from('live_sessions').select('capture_id').not('capture_id', 'is', null);
+      if (!error) {
+        known = true;
+        for (const r of data || []) ids.add(r.capture_id);
+        localStorage.setItem(KEY, JSON.stringify([...ids]));
+      }
+    } catch { /* keep what is known */ }
+  }
+  return known ? ids : null;
+}
+
+// Earlier versions made an empty poem (no stanzas, titled "Recording <date>") from each live recording.
+// Those are removed, and the recording goes back to belonging only to its live.
+async function removeLiveRecordingPoems(liveIds) {
+  if (!liveIds.size) return;
+  const poems = (await db.poems.toArray()).filter((p) => !p.deletedAt && !(p.stanzas || []).length && !p.tuneId && (!(p.title || '').trim() || /^Recording /.test(p.title)));
+  let n = 0;
+  for (const p of poems) {
+    const caps = (await db.captures.where('poemId').equals(p.id).toArray()).filter((c) => !c.deletedAt);
+    if (!caps.length || !caps.every((c) => liveIds.has(c.id))) continue;
+    if ((await db.bakes.where('poemId').equals(p.id).toArray()).some((b) => !b.deletedAt)) continue;
+    for (const c of caps) await db.captures.update(c.id, { poemId: null, updatedAt: now(), dirty: 1 });
+    await softDelete('poems', p.id);
+    n++;
+  }
+  if (n) syncSoon();
+}
+
 // Recordings made before this layout (the old Ideas tab) get a poem each, so they are still reachable.
 async function migrateLooseRecordings() {
-  const loose = (await db.captures.toArray()).filter((c) => !c.deletedAt && c.status === 'done' && !c.poemId);
+  const liveIds = await liveCaptureIds();
+  if (!liveIds) return;   // cannot tell live recordings apart yet; try again at the next start
+  await removeLiveRecordingPoems(liveIds);
+  const loose = (await db.captures.toArray()).filter((c) => !c.deletedAt && c.status === 'done' && !c.poemId && !liveIds.has(c.id));
   for (const c of loose) {
     const pid = uid();
     const t = now();
@@ -388,7 +429,19 @@ async function editorView(id) {
   const filesBox = h('div', { class: 'files' });
 
   // The page grows with the text, and a blank area below it always keeps the page scrollable.
-  const grow = () => { body.style.height = 'auto'; body.style.height = body.scrollHeight + 'px'; };
+  // The height is measured on a hidden copy of the box, so the real box is never collapsed while typing
+  // (collapsing it made the page jump on phones).
+  const ghost = h('textarea', { class: 'poem-body', 'aria-hidden': 'true', tabindex: '-1', readonly: true, style: 'position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;' });
+  const grow = () => {
+    ghost.style.width = body.getBoundingClientRect().width + 'px';
+    ghost.value = body.value;
+    ghost.style.height = 'auto';
+    const px = ghost.scrollHeight + 'px';
+    if (body.style.height !== px) body.style.height = px;
+  };
+  // A phone keyboard opening or closing fires "resize" too; only a change of width needs a new measure.
+  let lastW = 0;
+  const onResize = () => { const w = body.clientWidth; if (w === lastW) return; lastW = w; grow(); };
 
   let timer = null;
   const save = async () => {
@@ -406,8 +459,8 @@ async function editorView(id) {
   const queue = () => { status.textContent = 'Saving…'; clearTimeout(timer); timer = setTimeout(save, 800); };
   for (const el of [title, body]) { el.addEventListener('input', queue); el.addEventListener('blur', save); }
   body.addEventListener('input', grow);
-  window.addEventListener('resize', grow);
-  setTimeout(grow, 60);
+  window.addEventListener('resize', onResize);
+  setTimeout(() => { lastW = body.clientWidth; grow(); }, 60);
 
   /* tune and voice recordings of this poem, shown under the title.
      Baked audio and the voice recorded while baking are not shown here: they are under Manage files. */
@@ -548,11 +601,11 @@ async function editorView(id) {
 
   const el = h('section', { class: 'view editor' },
     h('div', { class: 'toolbar' }, h('button', { class: 'btn small', onclick: back }, '← Poems'), h('span', { class: 'grow status', style: 'text-align:right' }, status), h('span', { class: 'menuwrap' }, more)),
-    title, filesBox, body,
+    title, filesBox, body, ghost,
     h('div', { class: 'spacer', 'aria-hidden': 'true' }),
     fab);
   el._flush = save;
-  el._dispose = () => window.removeEventListener('resize', grow);
+  el._dispose = () => window.removeEventListener('resize', onResize);
   await fillFiles();
   return el;
 }

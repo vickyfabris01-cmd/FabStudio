@@ -195,3 +195,10 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 .invite-go { display: flex; gap: .6rem; flex-wrap: wrap; }
 .btn-go { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .4rem 1.3rem; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 600; text-decoration: none; }
 .btn-later { font: inherit; min-height: 44px; padding: .4rem 1.1rem; border-radius: 999px; color: var(--muted); background: transparent; border: 1px solid var(--line); cursor: pointer; }
+
+/* Footer: create-account block (shown only to people without an account) */
+.foot-invite { flex: 0 0 100%; display: flex; flex-direction: column; align-items: flex-start; gap: .55rem; padding: 1rem 1.1rem; margin: .4rem 0 .6rem; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; color: var(--text); }
+.foot-invite[hidden] { display: none; }
+.foot-invite b { font-family: var(--serif); font-size: 1.05rem; }
+.foot-invite ul { margin: 0; padding-left: 1.1rem; color: var(--muted); line-height: 1.6; }
+.foot-invite .foot-signin { font-size: .85rem; }
