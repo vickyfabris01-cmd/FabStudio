@@ -104,11 +104,17 @@ async function attempt(job) {
   let row = await db.items.get(id);
   if (!row) throw gone();
   if (row.title) job.title = row.title;
+  // Every new publish is at most 10 minutes (items published earlier keep working).
+  if (row.status !== 'published' && row.kind !== 'live' && row.duration > 600.5) {
+    throw permanent(new Error('Items can be at most 10 minutes. Cut it into parts (a long live is published from its recap in parts).'));
+  }
 
   // How many bytes still have to go up, so the upload can be shown as a percentage.
   const pend = [];
   if (row.mediaPending && row.blob) pend.push([row.mediaKey, row.blob.size]);
   if (row.thumbPending && row.thumbBlob) pend.push([row.thumbKey, row.thumbBlob.size]);
+  if (row.altPending && row.altBlob) pend.push([row.altKey, row.altBlob.size]);
+  if (row.bgPending && row.bgBlob) pend.push([row.bgKey, row.bgBlob.size]);
   const total = pend.reduce((n, p) => n + p[1], 0);
   const sent = {};
   const onProgress = (e) => {
@@ -129,15 +135,15 @@ async function attempt(job) {
   row = await db.items.get(id);
   if (!row) throw gone();
   if (getSyncState().state === 'auth') throw signedOut();
-  if (row.mediaPending || row.thumbPending || row.dirty) throw new Error(getSyncState().error || 'The upload did not finish.');
+  if (row.mediaPending || row.thumbPending || row.altPending || row.bgPending || row.dirty) throw new Error(getSyncState().error || 'The upload did not finish.');
 
   change(job, { label: 'Publishing', pct: Math.max(job.pct, 85) });
-  const out = await publishItem(id, row.mediaKey, row.thumbKey);
+  const out = await publishItem(id, row.mediaKey, row.thumbKey, { altKey: row.altKey || undefined, bgKey: row.bgKey || undefined });
 
   change(job, { label: 'Finishing', pct: 95 });
   await db.items.update(id, {
     status: 'published', publishedAt: row.publishedAt || now(), publicMediaKey: out.publicMediaKey,
-    publicThumbKey: out.publicThumbKey, ...(await snapshot(row.poemId)), publishRequested: 0, needsRepublish: 0, updatedAt: now(), dirty: 1,
+    publicThumbKey: out.publicThumbKey, publicAltKey: out.publicAltKey || null, publicBgKey: out.publicBgKey || null, ...(await snapshot(row.poemId)), publishRequested: 0, needsRepublish: 0, updatedAt: now(), dirty: 1,
   });
   await syncAndWait();
   row = await db.items.get(id);

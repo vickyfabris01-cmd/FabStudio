@@ -5,6 +5,7 @@ import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady
 import * as data from './data.js';
 import { maybeInvite } from './invite.js';
 import { downloadName, extOf } from '../shared/dl-name.js';
+import { drawScene, SCENE_W, SCENE_H } from '../shared/scene.js';
 
 const svg = (inner, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="${cls}">${inner}</svg>`;
 const ICON = {
@@ -59,7 +60,7 @@ function descBlock(body) {
 }
 
 /* ---------- audio: thumbnail with the play button inside and wave bars while it plays ---------- */
-function audioStage({ src, thumb, duration }) {
+function audioStage({ src, thumb, duration, title = '', scene = null, bgUrl = '', lyrics = null }) {
   const BARS = 24;
   // crossorigin lets the page read the sound for the wave bars. If the file cannot be fetched that way, play it plainly.
   const audio = h('audio', { crossorigin: 'anonymous', preload: 'metadata', src });
@@ -112,26 +113,51 @@ function audioStage({ src, thumb, duration }) {
   };
   const rest = () => bars.forEach((b) => { b.style.transform = 'scaleY(.08)'; });
   rest();
+
+  /* the animated screen (when the item has one): a canvas replaces the picture and the bars. It is drawn by the same
+     function that makes the video file, from a few KB of settings, so it costs listeners no extra data. */
+  const useScene = !!scene;
+  const levels = new Array(32).fill(0.03);
+  const SW = 960;
+  const SH = 540;
+  let sceneCv = null;
+  let sceneCtx = null;
+  let bgImg = null;
+  let markImg = null;
+  const drawNow = () => {
+    if (!sceneCtx) return;
+    sceneCtx.save();
+    sceneCtx.scale(SW / SCENE_W, SH / SCENE_H);
+    drawScene(sceneCtx, SCENE_W, SCENE_H, { t: audio.currentTime || 0, bars: levels, title, bg: bgImg, mark: markImg, lyrics, anim: scene && scene.lyricAnim });
+    sceneCtx.restore();
+  };
+  if (useScene) {
+    sceneCv = h('canvas', { class: 'scene', width: SW, height: SH, 'aria-hidden': 'true' });
+    sceneCtx = sceneCv.getContext('2d');
+    const load = (url) => new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = url; });
+    Promise.all([bgUrl ? load(bgUrl) : null, load('/img/fabris-poet-mark.png')]).then(([b, m]) => { bgImg = b; markImg = m; drawNow(); });
+    audio.addEventListener('seeked', drawNow);
+    audio.addEventListener('loadedmetadata', drawNow);
+  }
+
   let raf = 0;
   const frame = (now) => {
     raf = 0;
     if (audio.paused) return;
-    if (analyser) {
-      analyser.getByteFrequencyData(freq);
-      for (let i = 0; i < BARS; i++) {
-        const v = Math.pow(freq[1 + Math.floor((i * 40) / BARS)] / 255, 1.15);
-        bars[i].style.transform = `scaleY(${Math.max(0.08, v).toFixed(3)})`;
-      }
+    if (analyser) analyser.getByteFrequencyData(freq);
+    const level = (i, n) => (analyser
+      ? Math.pow(freq[1 + Math.floor((i * 40) / n)] / 255, 1.15)
+      : 0.3 + 0.7 * Math.abs(Math.sin(now / 260 + i * 0.7) * Math.cos(now / 510 + i * 0.35)));
+    if (useScene) {
+      for (let i = 0; i < levels.length; i++) levels[i] = Math.max(0.03, level(i, levels.length));
+      drawNow();
     } else {
-      for (let i = 0; i < BARS; i++) {
-        const v = 0.3 + 0.7 * Math.abs(Math.sin(now / 260 + i * 0.7) * Math.cos(now / 510 + i * 0.35));
-        bars[i].style.transform = `scaleY(${v.toFixed(3)})`;
-      }
+      for (let i = 0; i < BARS; i++) bars[i].style.transform = `scaleY(${Math.max(0.08, level(i, BARS)).toFixed(3)})`;
     }
     raf = requestAnimationFrame(frame);
   };
   audio.addEventListener('play', () => { setIcon(true); if (!raf) raf = requestAnimationFrame(frame); });
-  const stopped = () => { setIcon(false); rest(); };
+  const stopped = () => { setIcon(false); rest(); if (useScene) { levels.fill(0.03); drawNow(); } };
   audio.addEventListener('pause', stopped);
   audio.addEventListener('ended', stopped);
 
@@ -143,10 +169,10 @@ function audioStage({ src, thumb, duration }) {
     if (p && p.catch) p.catch(() => toast('Could not play this audio.'));
   });
 
-  const el = h('div', { class: 'stage' },
-    thumb ? h('img', { src: thumb, alt: '' }) : null,
-    barsEl, btn, h('div', { class: 'tl' }, seek, time), audio);
-  return { el };
+  const el = h('div', { class: 'stage' + (useScene ? ' scened' : '') },
+    useScene ? sceneCv : (thumb ? h('img', { src: thumb, alt: '' }) : null),
+    useScene ? null : barsEl, btn, h('div', { class: 'tl' }, seek, time), audio);
+  return { el, audio };
 }
 
 async function main() {
@@ -166,12 +192,89 @@ async function main() {
   // After a poem has been played to its end, people without an account are invited to create one (once every 3 days).
   document.addEventListener('ended', (e) => { if (e.target instanceof HTMLMediaElement) setTimeout(maybeInvite, 900); }, true);
 
-  /* media */
+  /* media: an item has an audio file and (when made) a video file. Listeners choose Listen or Watch; their last
+     choice is remembered, nothing switches by itself, and a switch carries on from the same second. */
   const src = data.mediaUrl(item.public_media_key);
   const thumb = data.mediaUrl(item.public_thumb_key);
-  const media = item.kind === 'video'
-    ? h('video', { class: 'player', controls: true, playsinline: true, preload: 'metadata', poster: thumb, src })
-    : audioStage({ src, thumb, duration: item.duration }).el;
+  const audioKey = item.kind === 'video' ? item.public_alt_key : item.public_media_key;
+  const videoKey = item.kind === 'video' ? item.public_media_key : item.public_alt_key;
+  const audioUrl = data.mediaUrl(audioKey);
+  const videoUrl = data.mediaUrl(videoKey);
+  const sceneOn = item.kind === 'audio' && item.scene;
+  const lyricLines = sceneOn && Array.isArray(item.lyrics) && item.lyrics.length ? item.lyrics : null;
+
+  // The album of this item (the parts of one live's recap), in order. Empty for ordinary items.
+  let parts = [];
+  if (item.source_live_id) { try { parts = await data.albumParts(item.source_live_id); } catch { parts = []; } }
+  const partIx = parts.findIndex((x) => x.id === id);
+  const nextPart = () => (parts.length ? parts[(partIx + 1) % parts.length] : null);
+  const prevPart = () => (parts.length ? parts[(partIx - 1 + parts.length) % parts.length] : null);
+  const goPart = (x) => { if (!x) return; if (x.id === id) { const m = player.media(); m.currentTime = 0; m.play().catch(() => {}); } else location.assign(`/poem/?id=${x.id}&play=1`); };
+
+  const player = buildPlayer();
+  function buildPlayer() {
+    const both = !!(audioUrl && videoUrl);
+    const KEY = 'fp.mode';
+    let saved = null;
+    try { saved = localStorage.getItem(KEY); } catch { /* private mode */ }
+    let mode = both ? (saved === 'watch' || saved === 'listen' ? saved : (item.kind === 'video' ? 'watch' : 'listen')) : (videoUrl && !audioUrl ? 'watch' : 'listen');
+    const slot = h('div', { class: 'player-slot' });
+    let cur = null;
+
+    const wire = (m) => {
+      m.addEventListener('ended', () => { if (parts.length) goPart(nextPart()); });
+      m.addEventListener('play', () => {
+        if (!('mediaSession' in navigator)) return;
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({ title: item.title, artist: 'Fabris Poet', album: item.album_title || '', artwork: thumb ? [{ src: thumb, sizes: '1280x720', type: 'image/jpeg' }] : [] });
+          navigator.mediaSession.setActionHandler('play', () => m.play());
+          navigator.mediaSession.setActionHandler('pause', () => m.pause());
+          navigator.mediaSession.setActionHandler('seekto', (d) => { m.currentTime = d.seekTime; });
+          navigator.mediaSession.setActionHandler('previoustrack', parts.length > 1 ? () => goPart(prevPart()) : null);
+          navigator.mediaSession.setActionHandler('nexttrack', parts.length > 1 ? () => goPart(nextPart()) : null);
+        } catch { /* lock screen controls are optional */ }
+      });
+    };
+    const mount = (m, at = 0, resume = false) => {
+      let media;
+      if (m === 'watch') {
+        media = h('video', { class: 'player', controls: true, playsinline: true, preload: 'metadata', poster: thumb, src: videoUrl });
+        slot.replaceChildren(media);
+      } else {
+        const st = audioStage({ src: audioUrl, thumb, duration: item.duration, title: item.title, scene: sceneOn ? item.scene : null, bgUrl: data.mediaUrl(item.public_bg_key), lyrics: lyricLines });
+        media = st.audio;
+        slot.replaceChildren(st.el);
+      }
+      cur = { media, mode: m };
+      wire(media);
+      if (at > 0) media.addEventListener('loadedmetadata', () => { try { media.currentTime = at; } catch { /* the start stays */ } }, { once: true });
+      if (resume) { const p = media.play(); if (p && p.catch) p.catch(() => {}); }
+    };
+    mount(mode);
+
+    const el = h('div', { class: 'player-wrap' }, slot);
+    if (both) {
+      const mk = (m, label) => h('button', { class: 'mode', type: 'button', 'aria-pressed': String(mode === m), onclick: () => {
+        if (cur.mode === m) return;
+        const at = cur.media.currentTime || 0;
+        const was = !cur.media.paused;
+        cur.media.pause();
+        mode = m;
+        try { localStorage.setItem(KEY, m); } catch { /* ignore */ }
+        mount(m, at, was);
+        btns.forEach(([bm, b]) => b.setAttribute('aria-pressed', String(bm === m)));
+      } }, label);
+      const btns = [['listen', mk('listen', 'Listen')], ['watch', mk('watch', 'Watch')]];
+      el.append(h('div', { class: 'modes', role: 'group', 'aria-label': 'Listen or watch' }, btns.map((x) => x[1])));
+    }
+    return { el, media: () => cur.media, play: () => cur.media.play() };
+  }
+  const media = player.el;
+  // Coming from the previous part of an album: carry on playing (if the browser blocks it, one tap does).
+  if (new URLSearchParams(location.search).get('play') === '1') {
+    const tryPlay = () => player.play().catch(() => { toast('Tap play to carry on with the album.'); });
+    setTimeout(tryPlay, 250);
+  }
 
   /* Like and the comment button */
   let mine = new Set();
@@ -297,21 +400,48 @@ async function main() {
     try { await navigator.clipboard.writeText(url); toast('Link copied.'); } catch { toast(url); }
   } }, icon('share'));
 
-  // Download: the Worker sends the file with a Content-Disposition, so the browser saves it under the name we give.
-  const dlName = downloadName(item.title, extOf({ key: item.public_media_key, mime: item.mime }));
-  const dlBtn = h('a', { class: 'react dl', href: `${src}${src.includes('?') ? '&' : '?'}download=${encodeURIComponent(dlName)}`, download: dlName, 'aria-label': 'Download', title: 'Download' }, icon('download'));
+  // Download: choose Audio or Video. The Worker sends the file with a Content-Disposition, so the browser saves it
+  // under the name we give. A version that does not exist yet shows greyed out. The Studio can switch downloads off per item.
+  function openDownload() {
+    const close = () => { document.removeEventListener('keydown', onKey); wrap.remove(); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const opt = (label, key) => {
+      if (!key) return h('span', { class: 'btn-go dl-opt off', 'aria-disabled': 'true' }, label, h('small', {}, 'Not available yet'));
+      const name = downloadName(item.title, extOf({ key }));
+      const url = data.mediaUrl(key);
+      return h('a', { class: 'btn-go dl-opt', href: `${url}${url.includes('?') ? '&' : '?'}download=${encodeURIComponent(name)}`, download: name, onclick: () => setTimeout(close, 400) },
+        label, h('small', {}, extOf({ key }).toUpperCase()));
+    };
+    const wrap = h('div', { class: 'invite', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Download', onclick: (e) => { if (e.target === wrap) close(); } },
+      h('div', { class: 'invite-box' },
+        h('button', { class: 'invite-x', type: 'button', 'aria-label': 'Close', onclick: close }, '×'),
+        h('h2', {}, 'Download'),
+        h('div', { class: 'dl-opts' }, opt('Audio', audioKey), opt('Video', videoKey))));
+    document.addEventListener('keydown', onKey);
+    document.body.append(wrap);
+  }
+  const dlBtn = item.allow_download === false ? null
+    : h('button', { class: 'react dl', type: 'button', 'aria-label': 'Download', title: 'Download', onclick: openDownload }, icon('download'));
 
   const titleText = h('h1', {}, item.title);
   const titleBox = h('div', { class: 'ttl' }, titleText);
   const description = (item.description || '').trim() ? descBlock(item.description.trim()) : null;
 
+  // The album: this item is one part of a live's recap. The strip lists the parts; the album loops.
+  const albumEl = parts.length ? h('section', { class: 'album', 'aria-label': 'Album' },
+    h('div', { class: 'album-head' }, h('span', { class: 'album-tag' }, 'Album'), h('strong', {}, item.album_title || 'Live recap'), h('span', { class: 'muted small' }, ` · ${parts.length} part${parts.length === 1 ? '' : 's'} · plays on, then starts again`)),
+    h('ol', { class: 'album-list' }, parts.map((x, i) => h('li', { class: x.id === id ? 'now' : '' },
+      h('a', { href: `/poem/?id=${x.id}${x.id === id ? '' : '&play=1'}`, 'aria-current': x.id === id ? 'true' : null },
+        h('span', { class: 'n' }, String(i + 1)), h('span', { class: 't' }, x.title), h('span', { class: 'muted small' }, fmtDur(x.duration))))))) : null;
+
   // Native replaceChildren() would print a missing item as the word "null", so only real items go in.
   root.replaceChildren(...[
     titleBox,
     media,
+    albumEl,
     h('p', { class: 'meta' }, fmtAgo(item.published_at), ' · ', views),
     description ? description.el : null,
-    h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, likeBtn, comBtn, dlBtn, shareBtn),
+    h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, [likeBtn, comBtn, dlBtn, shareBtn].filter(Boolean)),
     h('section', { class: 'comments-box' }, h('h2', { class: 'sr' }, 'Comments'), preview, panel),
     moreBox,
   ].filter(Boolean));

@@ -684,6 +684,7 @@ async function settingsView() {
   const est = navigator.storage?.estimate ? await navigator.storage.estimate() : null;
   const persisted = navigator.storage?.persisted ? await navigator.storage.persisted() : false;
   const raw = h('input', { type: 'checkbox', checked: p.raw, onchange: () => setPrefs({ raw: raw.checked }) });
+  const allowDl = h('input', { type: 'checkbox', checked: p.allowDownload !== false, onchange: () => { setPrefs({ allowDownload: allowDl.checked }); toast('Saved.'); } });
 
   const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Password' });
   const reauth = s.state === 'auth'
@@ -730,6 +731,9 @@ async function settingsView() {
       h('progress', { max: 100, value: 0 }),
       h('p', { class: 'muted small' }, 'Cloud usage will show here once it is configured.')),
     heroPanel,
+    h('div', { class: 'panel' }, h('h3', {}, 'Publishing defaults'),
+      h('label', { class: 'row check' }, allowDl, h('span', {}, 'Allow download on new items')),
+      h('p', { class: 'muted small' }, 'This is only the starting choice for new items on this device. Each item has its own Allow download switch, in the New item form and on its page.')),
     folderPanel,
     h('div', { class: 'panel' }, h('h3', {}, 'Recording'),
       h('label', { class: 'row check' }, raw, h('span', {}, 'Raw audio (turn off voice processing). Use with your soundcard or music.')),

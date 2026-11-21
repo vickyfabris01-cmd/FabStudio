@@ -312,13 +312,28 @@ export default {
         if (!mediaKey.startsWith(`items/${id}.`) || !thumbKey.startsWith(`thumbs/${id}.`)) throw new HttpError(400, 'Keys do not match item');
         const publicMediaKey = `pub/${id}/media.${extOf(mediaKey)}`;
         const publicThumbKey = `pub/${id}/thumb.${extOf(thumbKey)}`;
+        const pairs = [[mediaKey, publicMediaKey], [thumbKey, publicThumbKey]];
+        const out = { publicMediaKey, publicThumbKey };
+        // The second version (an audio item's video, a video item's audio) and the animated screen's background picture.
+        if (b.altKey) {
+          const altKey = keyFrom(b.altKey);
+          if (!altKey.startsWith(`items/${id}.`)) throw new HttpError(400, 'Keys do not match item');
+          out.publicAltKey = `pub/${id}/alt.${extOf(altKey)}`;
+          pairs.push([altKey, out.publicAltKey]);
+        }
+        if (b.bgKey) {
+          const bgKey = keyFrom(b.bgKey);
+          if (!bgKey.startsWith(`thumbs/${id}.`)) throw new HttpError(400, 'Keys do not match item');
+          out.publicBgKey = `pub/${id}/bg.${extOf(bgKey)}`;
+          pairs.push([bgKey, out.publicBgKey]);
+        }
         await deleteByPrefix(env.PUBLIC_BUCKET, `pub/${id}/`);
-        for (const [from, to] of [[mediaKey, publicMediaKey], [thumbKey, publicThumbKey]]) {
+        for (const [from, to] of pairs) {
           const obj = await bucket.get(from);
           if (!obj) throw new HttpError(404, 'File not uploaded yet');
           await env.PUBLIC_BUCKET.put(to, obj.body, { httpMetadata: obj.httpMetadata });
         }
-        return json({ publicMediaKey, publicThumbKey }, cors);
+        return json(out, cors);
       }
 
       // Live: copies a live item's thumbnail and, once the show is over, its recording to the public bucket.

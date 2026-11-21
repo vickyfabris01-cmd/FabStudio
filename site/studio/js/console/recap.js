@@ -3,6 +3,8 @@
 //    Each one has its own play button (only one plays at a time) and its own Publish button.
 //  - JOIN: tick two or more segments and press "Join & publish" (they need not be next to each other).
 //  - Everything published from here is a NEW post with its own, fresh numbers. The live keeps its own stats.
+//  - A post is at most 10 minutes. A longer live is published "in parts" (cut at your timestamps, never over 10 minutes);
+//    all the parts of one live play together as that live's ALBUM (a single part makes an album of one).
 //  - The waveform is only a picture of the recording (click it to play from that point).
 //  - On the right, read-only: the saved Chats and the Viewers of this live.
 // Cutting and joining happen on this laptop without re-encoding (webm-cut.js), so nothing is downloaded.
@@ -17,6 +19,7 @@ import { thumbField } from '../thumb-picker.js';
 
 const C = { accent: '#86c4ad', pick: '#4f8a75', rec: '#e5736a', line: '#2e2a3a', muted: '#9a93a8', text: '#ebe5d8', bg: '#14121a' };
 const WAVE_H = 72;
+const MAX_PART = 600;   // seconds: the longest a published post can be
 
 export const clock = (s) => {
   s = Math.max(0, Math.round(s));
@@ -105,7 +108,7 @@ export async function recapPane(opts) {
   const stat = (icon, label) => { const v = h('b', {}, '–'); return { v, el: h('span', { class: 'rc-st', title: label }, icon, v, h('span', { class: 'rc-stl' }, label)) }; };
   const sViews = stat(eyeIcon(14), 'Views'); const sPeak = stat(h('span', { class: 'stat-live', 'aria-hidden': 'true' }), 'Peak watching'); const sLove = stat(loveIcon(14), 'Love');
   sLove.el.classList.add('is-love');
-  const whole = h('button', { class: 'btn primary small', type: 'button' }, 'Publish whole recap');
+  const whole = h('button', { class: 'btn primary small', type: 'button' }, total > MAX_PART + 0.5 ? 'Publish in parts' : 'Publish whole recap');
   const head = h('div', { class: 'row rc-top' }, h('div', { class: 'grow' }, h('h3', {}, `${opts.title} · Recap`), note), h('div', { class: 'rc-stats' }, sViews.el, sPeak.el, sLove.el), whole);
   const wholeForm = h('div', { class: 'rc-form', hidden: true });
 
@@ -210,6 +213,8 @@ export async function recapPane(opts) {
     try {
       if (!st.blob) throw new Error('The recording is not on this device.');
       let blob = st.blob; let seconds = total;
+      if (!ranges && total > MAX_PART + 0.5) throw new Error('A post can be at most 10 minutes. Use "Publish in parts".');
+      if (ranges && ranges.reduce((n, [a, b]) => n + (b - a), 0) > MAX_PART + 0.5) throw new Error('A post can be at most 10 minutes. Pick a shorter range, or add a timestamp to split it.');
       if (ranges) {
         if (ranges.some(([a, b]) => b - a < 1)) throw new Error('Every part must be at least a second long.');
         st.index ||= await indexWebm(st.blob);
@@ -218,7 +223,7 @@ export async function recapPane(opts) {
         blob = cut.blob; seconds = cut.durationMs / 1000;
       }
       const t = tf ? await tf.get() : null;   // the thumbnail picked for this post, or a title card
-      const id = await createDraftFromClip({ liveId: itemId, title, blob, duration: seconds, thumb: t?.blob, thumbKind: t?.kind, thumbLook: t?.look || 0 });
+      const id = await createDraftFromClip({ liveId: itemId, title, blob, duration: seconds, thumb: t?.blob, thumbKind: t?.kind, thumbLook: t?.look || 0, albumTitle: liveTitle(), albumPos: ranges ? ranges[0][0] : 0 });
       publishItemNow(id, title).then(() => paintClips(true), () => paintClips(true));
       msg.textContent = `${what} "${title}" is on its way (${clock(seconds)}). It is a new post with fresh numbers.`;
       toast('Queued for publishing.');
@@ -245,8 +250,51 @@ export async function recapPane(opts) {
     return { input, el: h('div', { class: 'rc-formbox' }, h('div', { class: 'row rc-formrow' }, h('div', { class: 'grow' }, input), go, h('button', { class: 'btn small', type: 'button', onclick: close }, 'Cancel')), rec.tf.el) };
   }
 
+  // A live longer than 10 minutes: proposes parts (cut at your timestamps, each at most 10 minutes) and publishes them all.
+  function proposeParts() {
+    const parts = [];
+    let cur = null;
+    const flush = () => { if (cur && cur.end - cur.start >= 1) parts.push(cur); cur = null; };
+    for (const s of segments()) {
+      const len = s.end - s.start;
+      if (len > MAX_PART) {                                  // too long for one post: cut it into equal pieces
+        flush();
+        const n = Math.ceil(len / MAX_PART);
+        for (let k = 0; k < n; k++) parts.push({ start: s.start + (len * k) / n, end: s.start + (len * (k + 1)) / n });
+      } else if (cur && cur.end === s.start && cur.end - cur.start + len <= MAX_PART) cur.end = s.end;
+      else { flush(); cur = { start: s.start, end: s.end }; }
+    }
+    flush();
+    return parts.map((p) => ({ start: Math.round(p.start * 10) / 10, end: Math.round(p.end * 10) / 10 }));
+  }
+  function partsForm() {
+    const parts = proposeParts();
+    const titles = parts.map((_, i) => `${liveTitle()} · Part ${i + 1}`);
+    const rows = parts.map((p, i) => {
+      const input = h('input', { value: titles[i], maxlength: 120, 'aria-label': `Title of part ${i + 1}` });
+      input.oninput = () => { titles[i] = input.value; };
+      return h('div', { class: 'row rc-formrow' }, h('span', { class: 'small muted' }, `${clock(p.start)} – ${clock(p.end)} · ${clock(p.end - p.start)}`), h('div', { class: 'grow' }, input));
+    });
+    const go = h('button', { class: 'btn primary small', type: 'button' }, `Publish ${parts.length} part${parts.length === 1 ? '' : 's'}`);
+    go.onclick = async () => {
+      go.disabled = true;
+      let done = 0;
+      for (let i = 0; i < parts.length; i++) {
+        msg.className = 'small rc-msg'; msg.textContent = `Part ${i + 1} of ${parts.length}…`;
+        const ok = await publishRanges(titles[i], [[parts[i].start, parts[i].end]], `Part ${i + 1}`, null);
+        if (!ok) break;
+        done++;
+      }
+      go.disabled = false;
+      if (done === parts.length) { st.wholeOpen = false; wholeForm.hidden = true; msg.textContent = `All ${done} parts are on their way. They play together as the album "${liveTitle()}".`; }
+    };
+    wholeForm.replaceChildren(
+      h('p', { class: 'small muted' }, `This live is ${clock(total)} long, and a post can be at most 10 minutes. These parts are cut at your timestamps. They become one album named after the live, and play on from one to the next. You can rename each part.`),
+      ...rows, h('div', { class: 'row rc-formrow' }, go, h('button', { class: 'btn small', type: 'button', onclick: () => { st.wholeOpen = false; wholeForm.hidden = true; } }, 'Cancel')));
+  }
   whole.onclick = () => {
     if (st.wholeOpen) { st.wholeOpen = false; wholeForm.hidden = true; return; }
+    if (total > MAX_PART + 0.5) { st.wholeOpen = true; wholeForm.hidden = false; partsForm(); return; }
     st.wholeOpen = true; wholeForm.hidden = false;
     const f = formFor({ key: 'whole', value: `${liveTitle()} · full recap`, label: 'Publish', onGo: (t, tf) => publishRanges(t, null, 'Recap', tf), onCancel: () => { st.wholeOpen = false; wholeForm.hidden = true; } });
     wholeForm.replaceChildren(h('p', { class: 'small muted' }, 'This makes a NEW post from the whole recording. The live keeps its own numbers.'), f.el);

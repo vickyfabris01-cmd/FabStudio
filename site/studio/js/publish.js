@@ -4,16 +4,23 @@
 import { sb } from '../../shared/supabase.js';
 import { db, now } from './db.js';
 import { syncSoon, syncAndWait } from './sync.js';
-import { unpublishItem, deleteItemFiles, fetchMedia } from './api.js';
+import { unpublishItem, deleteItemFiles, fetchMedia, deleteMedia } from './api.js';
 import { requestPublish, jobFor, isBusy, onPublishJobs } from './publisher.js';
 import { thumbFromImage, thumbFromTitle, thumbFromVideo } from './thumbs.js';
 import { pickThumbnail } from './thumb-picker.js';
 import { createSelection, selectBar, tickBox } from './select.js';
 import { downloadName, extOf } from '../../shared/dl-name.js';
+import { extractAudio } from './mp4-audio.js';
+import { scenePanel } from './scene-panel.js';
+import { toM4a } from './audio-encode.js';
 import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
 
 // One place to change the upload limits.
-export const LIMITS = { videoSeconds: 300, videoMB: 150, audioMB: 100 };
+// Every published item (and every recap part) is at most 10 minutes. Items published before this rule keep working.
+export const LIMITS = { videoSeconds: 600, videoMB: 500, audioSeconds: 600, audioMB: 100 };
+
+// The device's default for the "Allow download" switch of new items (Settings changes it).
+export const allowDownloadDefault = () => { try { return JSON.parse(localStorage.getItem('fabstudio.prefs') || '{}').allowDownload !== false; } catch { return true; } };
 const AUDIO_EXT = ['mp3', 'm4a', 'webm', 'ogg'];
 const STATUS = { draft: 'Draft', published: 'Published', unpublished: 'Unpublished' };
 const MB = 1048576;
@@ -37,6 +44,8 @@ export async function checkSource(file, kind) {
   }
   if (!AUDIO_EXT.includes(ext)) return 'Audio must be MP3, M4A, WebM or OGG.';
   if (file.size > LIMITS.audioMB * MB) return `Audio can be at most ${LIMITS.audioMB} MB.`;
+  const d = await probeDuration(file);
+  if (d > LIMITS.audioSeconds) return `Audio can be at most ${Math.round(LIMITS.audioSeconds / 60)} minutes. Cut it into parts.`;
   return '';
 }
 
@@ -56,7 +65,7 @@ function itemRow(o) {
     mime: o.mime, duration: o.duration, mediaKey: `items/${o.id}.${extFor(o.mime, o.name || '')}`, thumbKey: `thumbs/${o.id}.jpg`,
     publicMediaKey: null, publicThumbKey: null, status: 'draft', publishedAt: null, commentsEnabled: true, reactionsEnabled: true,
     createdAt: t, updatedAt: t, dirty: 1, remote: 0, blob: o.blob, thumbBlob: o.thumb, mediaPending: 1, thumbPending: 1,
-    thumbKind: o.thumbKind || 'title', needsRepublish: 0,
+    thumbKind: o.thumbKind || 'title', needsRepublish: 0, allowDownload: allowDownloadDefault(),
     ...(o.bakeId ? { bakeId: o.bakeId } : {}),
   };
 }
@@ -81,6 +90,71 @@ export async function syncDraftFromBake(bakeId) {
   if (drafts.length) syncSoon();
 }
 
+/* ---------- the second version of an item: an audio item's video, a video item's audio ---------- */
+// The audio taken out of a video, as the fields to save on the item. Empty when this video has no usable audio.
+export async function audioOfVideo(id, file) {
+  try {
+    const a = await extractAudio(file);
+    if (!a) return {};
+    return { altBlob: a.blob, altMime: a.mime, altKey: `items/${id}.alt.m4a`, altPending: 1, altDuration: a.duration };
+  } catch (e) { console.warn('Could not take the audio out of the video', e); return {}; }
+}
+
+// Adds (or replaces) the second version from a file the person chose. Returns an error text, or '' when done.
+export async function setAltFile(id, file) {
+  const row = await db.items.get(id);
+  if (!row) return 'That item is gone.';
+  if (row.kind === 'audio') {
+    const ext = extFor(file.type, file.name);
+    if (ext !== 'mp4') return 'The video version must be MP4 (H.264).';
+    if (file.size > LIMITS.videoMB * MB) return `Videos can be at most ${LIMITS.videoMB} MB.`;
+    const d = await probeDuration(file);
+    if (d > LIMITS.videoSeconds) return `Videos can be at most ${Math.round(LIMITS.videoSeconds / 60)} minutes.`;
+    await putAlt(row, { blob: file, mime: file.type || 'video/mp4', ext: 'mp4', duration: d });
+    return '';
+  }
+  const ext = extFor(file.type, file.name);
+  if (!AUDIO_EXT.includes(ext)) return 'The audio version must be MP3, M4A, WebM or OGG.';
+  if (file.size > LIMITS.audioMB * MB) return `Audio can be at most ${LIMITS.audioMB} MB.`;
+  await putAlt(row, { blob: file, mime: file.type || 'audio/mpeg', ext, duration: await probeDuration(file) });
+  return '';
+}
+
+// Saves a second version on the item (replacing any earlier one).
+export async function putAlt(row, { blob, mime, ext, duration }) {
+  const key = `items/${row.id}.alt.${ext}`;
+  if (row.altKey && row.altKey !== key && row.remote) { try { await deleteMedia(row.altKey); } catch { /* the old file stays unused */ } }
+  await db.items.update(row.id, {
+    altBlob: blob, altMime: mime, altKey: key, altPending: 1, altDuration: duration, publicAltKey: null,
+    updatedAt: now(), dirty: 1, ...(row.status === 'published' ? { needsRepublish: 1 } : {}),
+  });
+  syncSoon();
+}
+
+// Takes the second version away (the file is deleted online too).
+export async function removeAlt(id) {
+  const row = await db.items.get(id);
+  if (!row || !row.altKey) return;
+  if (row.remote) { try { await deleteMedia(row.altKey); } catch { /* ignore */ } }
+  await db.items.update(id, {
+    altBlob: undefined, altMime: null, altKey: null, altPending: 0, altDuration: null, publicAltKey: null,
+    updatedAt: now(), dirty: 1, ...(row.status === 'published' ? { needsRepublish: 1 } : {}),
+  });
+  syncSoon();
+}
+
+// The audio of a video item that was published before versions existed (or whose audio could not be taken out).
+export async function makeAudioVersion(id) {
+  const row = await db.items.get(id);
+  if (!row || row.kind !== 'video') return 'Only a video has an audio version made from it.';
+  let blob = row.blob;
+  if (!blob) { if (!navigator.onLine) return 'This needs internet.'; blob = await fetchMedia(row.mediaKey); }
+  const a = await extractAudio(blob);
+  if (!a) return 'This video has no sound that can be copied out. Add an audio file yourself.';
+  await putAlt(row, { blob: a.blob, mime: a.mime, ext: 'm4a', duration: a.duration });
+  return '';
+}
+
 // An uploaded audio or video file is saved as a draft first.
 export async function createDraftFromFile(kind, file) {
   const problem = await checkSource(file, kind);
@@ -92,7 +166,10 @@ export async function createDraftFromFile(kind, file) {
   try { if (kind === 'video') { thumb = await thumbFromVideo(file); thumbKind = 'video'; } else thumb = await thumbFromTitle(title); } catch { thumb = await thumbFromTitle(title); thumbKind = 'title'; }
   const id = crypto.randomUUID();
   const mime = file.type || (kind === 'video' ? 'video/mp4' : 'audio/mpeg');
-  await db.items.put(itemRow({ id, kind, title, mime, duration, blob: file, thumb, thumbKind, name: file.name }));
+  const row = itemRow({ id, kind, title, mime, duration, blob: file, thumb, thumbKind, name: file.name });
+  // A video also gets its audio version, taken out of the file without re-encoding (about a second).
+  if (kind === 'video') Object.assign(row, await audioOfVideo(id, file));
+  await db.items.put(row);
   syncSoon();
   return id;
 }
@@ -103,10 +180,15 @@ export async function createDraftFromFile(kind, file) {
 // sourceLiveId is the same id saved with the post online, so the public page can leave recap posts out of
 // "More from Fabris".
 // thumb / thumbKind / thumbLook: the thumbnail picked in the recap (a title card is drawn when none was picked).
-export async function createDraftFromClip({ liveId, title, blob, duration, thumb, thumbKind = 'title', thumbLook = 0 }) {
+// A part of a recap belongs to the album of its live: albumTitle is the live's title and albumPos its place in the
+// recording (the second it starts at), so the parts always play in the order they were said, whatever order they were published in.
+// The recording is WebM/Opus, which many iPhones cannot play, so it is converted to an .m4a first when this browser can encode AAC.
+export async function createDraftFromClip({ liveId, title, blob, duration, thumb, thumbKind = 'title', thumbLook = 0, albumTitle = '', albumPos = null }) {
   const card = thumb || await thumbFromTitle(title, 'Fabris Poet', thumbLook);
   const id = crypto.randomUUID();
-  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: blob.type || 'audio/webm', duration, blob, thumb: card, thumbKind: thumb ? thumbKind : 'title' }), liveId, sourceLiveId: liveId || null, thumbVariant: thumbLook });
+  let media = blob;
+  try { const m = await toM4a(blob); if (m) { media = m.blob; duration = m.duration || duration; } } catch (e) { console.warn('Kept the original audio format', e); }
+  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: media.type || 'audio/webm', duration, blob: media, thumb: card, thumbKind: thumb ? thumbKind : 'title' }), liveId, sourceLiveId: liveId || null, thumbVariant: thumbLook, ...(liveId ? { albumTitle: albumTitle || title, albumPos: albumPos == null ? null : Math.round(albumPos) } : {}) });
   syncSoon();
   return id;
 }
@@ -153,7 +235,7 @@ async function unpublishFlow(id) {
   needNet();
   if (!confirm('Unpublish? Listeners lose access. Reactions and comments are kept.')) return false;
   await unpublishItem(id);
-  await db.items.update(id, { status: 'unpublished', publicMediaKey: null, publicThumbKey: null, needsRepublish: 0, updatedAt: now(), dirty: 1 });
+  await db.items.update(id, { status: 'unpublished', publicMediaKey: null, publicThumbKey: null, publicAltKey: null, publicBgKey: null, needsRepublish: 0, updatedAt: now(), dirty: 1 });
   await syncAndWait();
   toast('Unpublished.');
   return true;
@@ -230,7 +312,10 @@ const statusText = (r) => (r.status === 'published'
 /* ---------- list (the Studio tab) ---------- */
 let listFilter = 'all';
 const picked = createSelection();   // Select mode of the Studio list
-let editNext = null;                // set by a card's Edit: the item page then opens its edit form straight away
+let editNext = null;
+// Extra buttons for the "version" panel of an item page (the animated screen features add theirs here).
+let versionButtons = null;
+export const setVersionButtons = (fn) => { versionButtons = fn; };                // set by a card's Edit: the item page then opens its edit form straight away
 
 export async function publishListView(nav) {
   const all = (await db.items.toArray()).filter((r) => r.kind !== 'live').sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
@@ -335,7 +420,7 @@ export async function publishListView(nav) {
   const live = h('button', { class: 'iconbtn mic', type: 'button', 'aria-label': 'Go live (coming later)', onclick: () => toast('Going live comes in a later phase.') }, micIcon(22));
   const el = h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Studio'),
-      h('div', { class: 'row' }, live, h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake'))),
+      h('div', { class: 'row' }, live, window.matchMedia('(min-width: 900px)').matches ? h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake') : null)),
     filters, selBar.el, list, upload);
 
   if (navigator.onLine && stats.size) {
@@ -375,11 +460,13 @@ export async function itemView(id, nav, prefill = {}) {
   poemSel.value = existing?.poemId || '';
   const comments = h('input', { type: 'checkbox', checked: existing ? existing.commentsEnabled : true });
   const reactions = h('input', { type: 'checkbox', checked: existing ? existing.reactionsEnabled : true });
+  const allowDl = h('input', { type: 'checkbox', checked: allowDownloadDefault() });
   const details = h('div', { class: 'panel' },
     h('h3', {}, 'Details'), title, desc,
     h('label', {}, h('span', { class: 'muted small' }, 'Show this poem’s text on the page'), poemSel),
     h('label', { class: 'row check' }, comments, h('span', {}, 'Allow comments')),
-    h('label', { class: 'row check' }, reactions, h('span', {}, 'Allow reactions')));
+    h('label', { class: 'row check' }, reactions, h('span', {}, 'Allow reactions')),
+    h('label', { class: 'row check' }, allowDl, h('span', {}, 'Allow download')));
 
   const back = h('button', { class: 'btn small', onclick: () => nav.back() }, '← Studio');
   const root = h('section', { class: 'view' }, h('div', { class: 'toolbar' }, back));
@@ -442,6 +529,8 @@ export async function itemView(id, nav, prefill = {}) {
       try {
         const blob = thumb || await thumbFromTitle(title.value.trim());
         const t = now();
+        // A video also gets its audio version, taken out of the file without re-encoding.
+        const alt = src.kind === 'video' ? await audioOfVideo(id, src.blob) : {};
         await db.items.put({
           id, kind: src.kind, poemId: poemSel.value || null, title: title.value.trim(), description: desc.value.trim(),
           poemTitle: '', poemStanzas: [], mime: src.mime, duration: src.duration,
@@ -449,7 +538,7 @@ export async function itemView(id, nav, prefill = {}) {
           publicMediaKey: null, publicThumbKey: null, status: 'draft', publishedAt: null,
           commentsEnabled: comments.checked, reactionsEnabled: reactions.checked,
           createdAt: t, updatedAt: t, dirty: 1, remote: 0, blob: src.blob, thumbBlob: blob, mediaPending: 1, thumbPending: 1,
-          thumbKind: thumb ? thumbKind : 'title', thumbVariant: thumbLook, needsRepublish: 0,
+          thumbKind: thumb ? thumbKind : 'title', thumbVariant: thumbLook, needsRepublish: 0, allowDownload: allowDl.checked, ...alt,
         });
         syncSoon();
         toast('Draft saved. It uploads when you are online.');
@@ -716,6 +805,48 @@ async function existingView(first, nav) {
       !busy && job?.state === 'error' ? h('p', { class: 'error' }, 'Publishing failed: ' + job.error) : null);
   }
 
+  /* the second version: an audio item's video, a video item's audio */
+  const versionsBox = h('div', { class: 'panel' });
+  const isAudioItem = () => item.kind === 'audio';
+  async function altChanged() {
+    item = await db.items.get(id);
+    paintVersions();
+    paintScene();
+    paintActions();
+  }
+  // The animated screen, lyrics and "Make video version" (audio items only).
+  const sceneBox = h('div', {});
+  function paintScene() {
+    if (item.kind !== 'audio') { sceneBox.replaceChildren(); return; }
+    put(sceneBox, scenePanel({ id, item, db, now, syncSoon, fetchMedia, putAlt, changed: altChanged }));
+  }
+  const run = (btn, fn) => async () => {
+    btn.disabled = true;
+    try { const problem = await fn(); if (problem) toast(problem); else await altChanged(); } catch (e) { toast(e.message || String(e)); }
+    finally { btn.disabled = false; }
+  };
+  function paintVersions() {
+    if (item.kind === 'live') { versionsBox.hidden = true; return; }
+    const what = isAudioItem() ? 'Video' : 'Audio';
+    const has = !!item.altKey;
+    const upload = h('button', { class: 'btn small', type: 'button' }, has ? `Replace ${what.toLowerCase()} version` : `Upload ${what.toLowerCase()} version`);
+    upload.onclick = run(upload, async () => {
+      const file = await pickFile(isAudioItem() ? 'video/mp4' : 'audio/*');
+      if (!file) return '';
+      const problem = await setAltFile(id, file);
+      if (!problem && isAudioItem() && item.duration && Math.abs((await probeDuration(file)) - item.duration) > 3) toast('This video is not the same length as the audio. It was added anyway.');
+      return problem;
+    });
+    const extract = !isAudioItem() ? h('button', { class: 'btn small', type: 'button' }, 'Take the audio from the video') : null;
+    if (extract) extract.onclick = run(extract, () => makeAudioVersion(id));
+    const remove = has ? h('button', { class: 'btn small danger', type: 'button' }, `Remove ${what.toLowerCase()} version`) : null;
+    if (remove) remove.onclick = run(remove, async () => { if (!confirm(`Remove the ${what.toLowerCase()} version?`)) return ''; await removeAlt(id); return ''; });
+    put(versionsBox,
+      h('h3', {}, `${what} version`),
+      h('p', { class: has ? '' : 'muted' }, has ? `${what} version ready${item.altDuration ? ', ' + fmtDur(item.altDuration) : ''}${item.altPending ? ' (uploading)' : ''}.` : `No ${what.toLowerCase()} version yet. People can still download this item; the ${what.toLowerCase()} option shows greyed out.`),
+      h('div', { class: 'stack' }, upload, extract, remove, ...(versionButtons ? versionButtons(item, altChanged) : [])));
+  }
+
   /* actions */
   const actions = h('div', { class: 'panel' });
   const guarded = (fn) => async () => {
@@ -743,8 +874,9 @@ async function existingView(first, nav) {
       h('h3', {}, 'Actions'),
       flag('Allow comments', 'commentsEnabled'),
       flag('Allow reactions', 'reactionsEnabled'),
-      published() && item.needsRepublish ? h('p', { class: 'muted small' }, 'The thumbnail changed. Update to show it on the public page.') : null,
-      !busy && (item.mediaPending || item.thumbPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
+      flag('Allow download', 'allowDownload'),
+      published() && item.needsRepublish ? h('p', { class: 'muted small' }, 'Something changed (thumbnail or a version). Update to show it on the public page.') : null,
+      !busy && (item.mediaPending || item.thumbPending || item.altPending || item.bgPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
       busy ? null : h('div', { class: 'stack' }, buttons,
         h('button', { class: 'btn danger', type: 'button', onclick: guarded(async () => { if (await deleteFlow(id)) nav.back(); }) }, 'Delete')));
   }
@@ -754,13 +886,15 @@ async function existingView(first, nav) {
   paintStatus();
   paintDesc();
   paintProgress();
+  paintVersions();
+  paintScene();
   paintActions();
   put(root,
     h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio'),
       h('button', { class: 'btn small primary', type: 'button', onclick: openEdit }, 'Edit')),
     titleBox, wrap, h('div', { class: 'row' }, thumbEdit, h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await downloadItem(id); } catch (e) { toast(e.message || String(e)); } } }, 'Download')), status, descBox,
     published() ? statRow : null,
-    progressSlot, actions, commentsBox);
+    progressSlot, versionsBox, sceneBox, actions, commentsBox);
 
   disposers.push(onPublishJobs((j) => {
     if (j.id !== id || !root.isConnected) return;

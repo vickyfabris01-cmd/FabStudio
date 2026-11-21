@@ -99,8 +99,8 @@ export async function fetchMedia(key) {
 }
 
 // ---- Phase 2: publishing (each needs internet and the owner's sign-in)
-export async function publishItem(itemId, mediaKey, thumbKey) {
-  return await (await call('/publish', { method: 'POST', json: { itemId, mediaKey, thumbKey } })).json();
+export async function publishItem(itemId, mediaKey, thumbKey, extra = {}) {
+  return await (await call('/publish', { method: 'POST', json: { itemId, mediaKey, thumbKey, ...extra } })).json();
 }
 export async function unpublishItem(itemId) {
   await call('/unpublish', { method: 'POST', json: { itemId } });

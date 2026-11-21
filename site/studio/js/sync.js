@@ -14,7 +14,7 @@ const T = {
   bakes:    { remote: 'bakes',           fields: ['id','poemId','captureId','tuneId','tuneVolume','mime','duration','r2Key','createdAt','updatedAt','deletedAt'] },
   // sourceLiveId is sent only when it has a value (a post made from a live recap), so every other item keeps working
   // even before migration 007 has been run.
-  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'], optional: ['sourceLiveId', 'thumbKind'] },
+  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'], optional: ['sourceLiveId', 'thumbKind', 'allowDownload', 'altKey', 'publicAltKey', 'altMime', 'scene', 'bgKey', 'publicBgKey', 'lyrics', 'showLyrics', 'albumTitle', 'albumPos'] },
 };
 // Files that belong to each row: which field holds the file, its R2 key, and its "still to upload" flag.
 const FILE = { blob: 'blob', key: 'r2Key', pending: 'blobPending' };
@@ -26,20 +26,26 @@ const BLOBS = {
   items: [
     { blob: 'blob', key: 'mediaKey', pending: 'mediaPending' },
     { blob: 'thumbBlob', key: 'thumbKey', pending: 'thumbPending' },
+    { blob: 'altBlob', key: 'altKey', pending: 'altPending' },     // the second version (video of audio, audio of video)
+    { blob: 'bgBlob', key: 'bgKey', pending: 'bgPending' },        // background picture of the animated screen
   ],
 };
 const ORDER = ['poems', 'tunes', 'captures', 'bakes', 'items'];
 const snake = (k) => k.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
+// `optional` columns come from later migrations: they are sent only when they have a value. The ones in `CLEARABLE`
+// are also sent as null when the Studio set them to null on purpose (a removed second version, removed lyrics),
+// and a null that comes back from the server clears them here too.
+const CLEARABLE = ['altKey', 'publicAltKey', 'altMime', 'scene', 'bgKey', 'publicBgKey', 'lyrics'];
 const toRemote = (row, fields, optional = []) => ({
   ...Object.fromEntries(fields.map((f) => [snake(f), row[f] ?? null])),
-  ...Object.fromEntries(optional.filter((f) => row[f] != null).map((f) => [snake(f), row[f]])),
+  ...Object.fromEntries(optional.filter((f) => row[f] != null || (row[f] === null && CLEARABLE.includes(f))).map((f) => [snake(f), row[f]])),
 });
 const fromRemote = (r, fields, optional = []) => ({
   ...Object.fromEntries(fields.map((f) => [f, r[snake(f)] ?? null])),
-  ...Object.fromEntries(optional.filter((f) => r[snake(f)] != null).map((f) => [f, r[snake(f)]])),
+  ...Object.fromEntries(optional.filter((f) => r[snake(f)] != null || (snake(f) in r && CLEARABLE.includes(f))).map((f) => [f, r[snake(f)] ?? null])),
 });
 // Columns added by later migrations (source_live_id, thumb_kind). If one is not there yet, the row is sent without them.
-const NEW_COLUMN = /source_live_id|thumb_kind/;
+const NEW_COLUMN = /source_live_id|thumb_kind|allow_download|alt_key|public_alt_key|alt_mime|scene|bg_key|public_bg_key|lyrics|show_lyrics|album_title|album_pos/;
 
 let running = false;
 let timer = null;

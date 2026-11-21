@@ -200,10 +200,12 @@ export async function liveConsoleView(itemId, nav) {
     try { await engine.goLive(); } catch (e) { toast(e.message || 'Could not go live'); }
     go.disabled = false;
   };
+  // Going live needs a laptop (sound card, recording). A phone can schedule a live and share its link, but not start it.
+  const laptop = window.matchMedia('(min-width: 900px)').matches;
   const sched = h('section', { class: 'card c-sched' },
-    h('div', { class: 'c-sched-t' }, h('b', {}, 'Ready when you are'), when, h('div', { class: 'small muted' }, 'Goes straight on air. It never starts by itself.')),
+    h('div', { class: 'c-sched-t' }, h('b', {}, laptop ? 'Ready when you are' : 'Scheduled'), when, h('div', { class: 'small muted' }, laptop ? 'Goes straight on air. It never starts by itself.' : 'Go live from a laptop. Share the link below so people know where to join.')),
     h('div', { class: 'row c-sched-l' }, h('div', { class: 'grow' }, linkIn), h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(itemId) }, 'Copy')),
-    go);
+    laptop ? go : null);
 
   /* ----- sound strip: level, gain, volume, input, output, show title ----- */
   const sel = h('select', { 'aria-label': 'Audio input' });
@@ -283,7 +285,7 @@ export async function liveConsoleView(itemId, nav) {
     }
     meterFill.style.width = `${Math.round(st.level * 100)}%`;
     meterFill.classList.toggle('hot', st.level > 0.92);
-    sound.hidden = ended;
+    sound.hidden = ended || !laptop;       // the sound card strip is for the laptop
     src.el.hidden = ended;
     if (document.activeElement !== vol) vol.value = deck.s.volume;
     volText.textContent = `${Math.round(deck.s.volume * 100)}%`;

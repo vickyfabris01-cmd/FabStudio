@@ -539,3 +539,25 @@ input.rc-mname:hover, input.rc-mname:focus { border-color: var(--line); backgrou
 .tp-g-laptop { left: 0; right: 0; top: 25.3%; height: 49.4%; }
 .tp-g-phone { top: 0; bottom: 0; left: 16.2%; width: 67.5%; border-color: var(--accent); }
 .tp-g-phone span { left: auto; right: 4px; }
+
+/* Animated screen panel and lyrics editor */
+.sc-preview { display: block; width: 100%; max-width: 520px; aspect-ratio: 16 / 9; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); }
+.panel h4 { margin: 1rem 0 .3rem; font-size: .95rem; color: var(--muted); font-weight: 600; }
+body.le-open { overflow: hidden; }
+.le { position: fixed; inset: 0; z-index: 80; background: var(--bg); overflow-y: auto; padding: .8rem max(.9rem, env(safe-area-inset-right)) 3rem max(.9rem, env(safe-area-inset-left)); display: flex; flex-direction: column; gap: .6rem; box-sizing: border-box; }
+.le-top { display: flex; align-items: center; gap: .6rem; position: sticky; top: 0; background: var(--bg); padding: .3rem 0; z-index: 2; }
+.le-top strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.le-preview { width: 100%; max-width: 420px; aspect-ratio: 16 / 9; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); align-self: flex-start; }
+.le-wave { width: 100%; height: 96px; border: 1px solid var(--line); border-radius: 10px; touch-action: none; cursor: pointer; display: block; }
+.le-clock { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+.le-info { margin: 0; }
+.le-tools { flex-wrap: wrap; }
+.le-list { display: flex; flex-direction: column; gap: 2px; }
+.le-gap { height: .7rem; }
+.le-row { display: flex; gap: .6rem; align-items: baseline; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; min-height: 44px; box-sizing: border-box; }
+.le-row.on { border-color: var(--accent); background: rgba(134,196,173,.12); }
+.le-row.timed .le-time { color: var(--accent); }
+.le-time { flex: 0 0 auto; font: inherit; font-size: .78rem; font-variant-numeric: tabular-nums; color: var(--muted); background: none; border: 0; padding: .1rem .2rem; min-width: 7.2rem; text-align: left; cursor: pointer; }
+.le-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.le-edit textarea { width: 100%; min-height: 40vh; box-sizing: border-box; }
+@media (min-width: 900px) { .le { padding: 1.2rem 8vw 3rem; } }

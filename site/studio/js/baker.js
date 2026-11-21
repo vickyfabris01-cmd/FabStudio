@@ -6,11 +6,26 @@ import { startCapture } from './recorder.js';
 import { LiveMix, BAKE_TUNE_VOLUME, loadRemix, Remix, rebake } from './mixer.js';
 import { createDraftFromBake, syncDraftFromBake } from './publish.js';
 import { h, fmtDur, fmtDate, extFor, toast, openModal, micIcon, stopIcon } from './ui.js';
+import { LiveAudio, listInputs } from './live-audio.js';
+import { listOutputs } from './console/deck.js';
+
+// Baking is done on a laptop (a screen at least 900px wide), where the sound card gives a proper mix. A phone can
+// still publish, edit and delete everything that was baked.
+const isLaptop = () => window.matchMedia('(min-width: 900px)').matches;
+function laptopOnlyView(nav) {
+  return h('section', { class: 'view' },
+    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio')),
+    h('h2', {}, 'Bake on a laptop'),
+    h('p', { class: 'muted' }, 'Baking mixes your voice with the poem’s tune, and needs a laptop with a proper sound card for a good result. Open the Studio on your laptop to bake. Baked audio already made shows up here, and you can publish, edit or delete it from your phone.'));
+}
+const bakePrefs = () => { try { return JSON.parse(localStorage.getItem('fabstudio.bake') || '{}'); } catch { return {}; } };
+const saveBakePrefs = (p) => { try { localStorage.setItem('fabstudio.bake', JSON.stringify({ ...bakePrefs(), ...p })); } catch { /* ignore */ } };
 
 const poemName = (p) => p.title || (p.stanzas?.[0] || '').split('\n')[0] || 'Untitled';
 
 /* ---------- step 1: choose a poem ---------- */
 async function pickPoemView(nav) {
+  if (!isLaptop()) return laptopOnlyView(nav);
   const rows = (await db.poems.toArray()).filter((p) => !p.deletedAt).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   return h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('button', { class: 'btn small', onclick: () => nav.back() }, '← Studio')),
@@ -32,6 +47,7 @@ function openMic() {
 
 /* ---------- step 2: the baking page ---------- */
 export async function bakerView({ poemId, nav }) {
+  if (!isLaptop()) return laptopOnlyView(nav);
   if (!poemId) return pickPoemView(nav);
   const poem = await db.poems.get(poemId);
   if (!poem || poem.deletedAt) { nav.back(); return h('section', { class: 'view' }); }
@@ -46,6 +62,67 @@ export async function bakerView({ poemId, nav }) {
   const mix = new LiveMix(tuneBlob, BAKE_TUNE_VOLUME);
   try { await mix.load(); } catch { mix.tuneBuf = null; toast('The tune could not be read. Baking without it.'); }
   const hasTune = !!mix.tuneBuf;
+
+  /* the sound strip, the same one the live console uses: input, gain, level, output */
+  const audioIn = new LiveAudio();
+  let armed = false;
+  const inSel = h('select', { 'aria-label': 'Audio input' });
+  const outSel = h('select', { 'aria-label': 'Audio output (where you hear the tune)' });
+  const gain = h('input', { type: 'range', min: 0, max: 2, step: 0.05, value: String(bakePrefs().gain ?? 1), 'aria-label': 'Input gain' });
+  const meterFill = h('div', { class: 'meter-fill' });
+  const soundMsg = h('p', { class: 'small error' });
+  gain.oninput = () => { audioIn.setGain(Number(gain.value)); saveBakePrefs({ gain: Number(gain.value) }); };
+  const fillDevices = async () => {
+    const ins = await listInputs();
+    inSel.replaceChildren(h('option', { value: '' }, 'Default input'), ...ins.map((i) => h('option', { value: i.id }, i.label)));
+    inSel.value = ins.some((i) => i.id === bakePrefs().inId) ? bakePrefs().inId : '';
+    const outs = await listOutputs();
+    outSel.replaceChildren(h('option', { value: '' }, 'Default output'), ...outs.filter((o) => o.id !== 'default').map((o) => h('option', { value: o.id }, o.label)));
+    outSel.value = outs.some((o) => o.id === bakePrefs().outId) ? bakePrefs().outId : '';
+    outSel.disabled = !mix.ctx.setSinkId;
+    if (outSel.disabled) outSel.title = 'This browser cannot choose an output. Use Chrome or Edge.';
+  };
+  const arm = async (deviceId) => {
+    try {
+      if (!armed) { await audioIn.start({ deviceId, gain: Number(gain.value) }); armed = true; audioIn.onLost = () => { soundMsg.textContent = 'The input disappeared. Choose it again.'; }; }
+      else await audioIn.useDevice(deviceId);
+      soundMsg.textContent = '';
+      saveBakePrefs({ inId: deviceId });
+      await fillDevices();
+      return true;
+    } catch (e) { soundMsg.textContent = e.name === 'NotAllowedError' ? 'The browser blocked the microphone.' : (e.message || String(e)); return false; }
+  };
+  inSel.onchange = () => arm(inSel.value);
+  outSel.onchange = async () => {
+    saveBakePrefs({ outId: outSel.value });
+    try { await mix.ctx.setSinkId(outSel.value); soundMsg.textContent = ''; } catch (e) { soundMsg.textContent = 'Could not use that output: ' + (e.message || e.name); }
+  };
+  const meterTimer = setInterval(() => { meterFill.style.width = Math.round((armed ? audioIn.level() : 0) * 100) + '%'; }, 100);
+  fillDevices().then(async () => {
+    if (bakePrefs().outId && mix.ctx.setSinkId) mix.ctx.setSinkId(bakePrefs().outId).catch(() => {});
+    await arm(inSel.value);       // opens the sound card so the level shows before you record
+  });
+  const sound = h('section', { class: 'card c-sound' },
+    h('div', { class: 'row c-soundrow' },
+      h('span', { class: 'small muted' }, 'Level'), h('div', { class: 'meter c-meter' }, meterFill),
+      h('span', { class: 'small muted' }, 'Gain'), h('div', { style: 'width:100px' }, gain),
+      h('span', { class: 'small muted' }, 'In'), h('div', { class: 'c-sel' }, inSel),
+      h('span', { class: 'small muted' }, 'Out'), h('div', { class: 'c-sel' }, outSel)),
+    soundMsg);
+  // Scroll the poem for you while you read.
+  const auto = h('input', { type: 'checkbox', 'aria-label': 'Scroll the poem for me' });
+  const speed = h('input', { type: 'range', min: 5, max: 120, step: 5, value: '30', 'aria-label': 'Scroll speed' });
+  let scrollRaf = 0; let lastT = 0; let acc = 0;
+  const scrollStep = (t) => {
+    scrollRaf = 0;
+    if (!auto.checked) return;
+    if (lastT) { acc += (Number(speed.value) * (t - lastT)) / 1000; const whole = Math.trunc(acc); if (whole) { window.scrollBy(0, whole); acc -= whole; } }
+    lastT = t;
+    scrollRaf = requestAnimationFrame(scrollStep);
+  };
+  auto.onchange = () => { lastT = 0; if (auto.checked && !scrollRaf) scrollRaf = requestAnimationFrame(scrollStep); };
+  const scrollRow = h('label', { class: 'row small' }, auto, h('span', {}, 'Scroll the poem for me'), h('div', { style: 'width:110px' }, speed));
+  const cleanup = () => { clearInterval(meterTimer); cancelAnimationFrame(scrollRaf); audioIn.stop(); };
 
   let stream = null;
   let session = null;
@@ -93,8 +170,8 @@ export async function bakerView({ poemId, nav }) {
 
   const begin = async () => {
     if (!navigator.mediaDevices?.getUserMedia) { toast('Recording is not available in this browser.'); return false; }
-    try { stream = await openMic(); }
-    catch (e) { toast('Microphone unavailable: ' + (e.message || e.name)); return false; }
+    if (!armed && !(await arm(inSel.value))) { toast(soundMsg.textContent || 'The sound card could not be opened.'); return false; }
+    stream = audioIn.stream;
     try {
       await mix.begin(stream);
       session = await startCapture({ poemId, stream, raw: true });
@@ -141,7 +218,7 @@ export async function bakerView({ poemId, nav }) {
     } catch (e) {
       toast('Saving failed: ' + (e.message || e));
     }
-    stream?.getTracks().forEach((tr) => tr.stop());
+    cleanup();
     recording = false;
     if (!out || !out.blob.size) { toast('Nothing was recorded.'); return nav.back(); }
     const cap = capId ? await db.captures.get(capId) : null;
@@ -173,6 +250,7 @@ export async function bakerView({ poemId, nav }) {
     onclick: () => {
       if (recording) return toast('Stop the recording first.');
       mix.dispose();
+      cleanup();
       nav.back();
     },
   }, '← Studio');
@@ -187,6 +265,7 @@ export async function bakerView({ poemId, nav }) {
     h('div', { class: 'toolbar' }, back, h('span', { class: 'status' }, 'Baking')),
     h('h2', {}, poemName(poem)),
     controls,
+    sound, scrollRow,
     h('p', { class: 'muted small', style: 'margin:.5rem 0 0' }, hasTune
       ? 'Tap the tune to start it and the microphone together, or tap the red mic first and start the tune later. Use headphones.'
       : 'No background tune for this poem. Tap the red mic to record.'),
@@ -199,7 +278,7 @@ export async function bakerView({ poemId, nav }) {
     if (bar) controls.style.top = `calc(${bar.offsetHeight}px + env(safe-area-inset-top))`;
   }, 0);
 
-  el._dispose = () => { if (!recording) mix.dispose(); };
+  el._dispose = () => { if (!recording) { mix.dispose(); cleanup(); } };
   return el;
 }
 

@@ -1,12 +1,13 @@
 // FabStudio service worker: makes the app open offline.
 // Files are served from cache instantly and refreshed in the background,
 // so a new deploy shows up on the second open. Bump CACHE only to force a full reset.
-const CACHE = 'fabstudio-shell-v13';
+const CACHE = 'fabstudio-shell-v14';
 const SHELL = [
   '/studio/', '/studio/index.html', '/studio/manifest.webmanifest', '/studio/css/studio.css',
   '/studio/js/app.js', '/studio/js/db.js', '/studio/js/ui.js', '/studio/js/auth.js', '/studio/js/api.js',
   '/studio/js/sync.js', '/studio/js/recorder.js', '/studio/js/mixer.js', '/studio/js/baker.js', '/studio/js/publish.js', '/studio/js/publisher.js', '/studio/js/thumbs.js', '/studio/js/live.js', '/studio/js/live-engine.js', '/studio/js/live-audio.js',
   '/studio/js/console/header.js', '/studio/js/console/stats.js', '/studio/js/console/reading.js', '/studio/js/console/myaudio.js', '/studio/js/console/deck.js', '/studio/js/console/source.js', '/studio/js/console/chatfeed.js', '/studio/js/console/settings-modal.js', '/studio/js/console/recap.js', '/studio/js/console/webm-cut.js', '/studio/js/console/playlist.js', '/studio/js/home.js', '/studio/js/performance.js', '/studio/js/stats-data.js', '/studio/js/thumb-picker.js', '/studio/js/select.js', '/shared/live-socket.js', '/shared/sfu.js', '/shared/live-settings.js', '/shared/dl-name.js',
+  '/studio/js/mp4-mux.js', '/studio/js/mp4-audio.js', '/studio/js/audio-encode.js', '/studio/js/scene-render.js', '/studio/js/scene-panel.js', '/studio/js/lyrics-editor.js', '/shared/scene.js',
   '/studio/icons/icon-192.png', '/studio/icons/icon-512.png', '/studio/icons/mark.png',
   '/shared/config.js', '/shared/supabase.js', '/shared/vendor/dexie.min.js', '/shared/vendor/supabase.js',
 ];
