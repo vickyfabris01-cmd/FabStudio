@@ -9,8 +9,9 @@ import { sfuConfigured, createSession, newTracks, renegotiate, SESSION_RE, TRACK
 
 export { LiveRoom };
 
-const KEY_RE = /^(captures|tunes|bakes|items|thumbs)\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/;
-const PUB_RE = /^(pub\/[0-9a-f-]{36}\/(media|thumb)\.[a-z0-9]{2,5}|hero\/[1-7]-[0-9]{10,14}\.jpg)$/;   // posts, and the home page hero pictures
+// <folder>/<id>.<ext>, plus an item's second version (items/<id>.alt.<ext>) and screen background (thumbs/<id>.bg.<ext>)
+const KEY_RE = /^(captures|tunes|bakes|items|thumbs)\/[0-9a-f-]{36}(\.(alt|bg))?\.[a-z0-9]{2,5}$/;
+const PUB_RE = /^(pub\/[0-9a-f-]{36}\/(media|thumb|alt|bg)\.[a-z0-9]{2,5}|hero\/[1-7]-[0-9]{10,14}\.jpg)$/;   // posts, and the home page hero pictures
 const UUID_RE = /^[0-9a-f-]{36}$/;
 const MAX_PART = 10 * 1024 * 1024; // client sends 8 MB parts; allow headroom
 
