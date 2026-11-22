@@ -16,6 +16,7 @@ const EYE = '<path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4
 const SEND = '<path d="M10 14l11 -11"/><path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5"/>';
 const LIKE = '<path d="M7 11v8a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-7a1 1 0 0 1 1 -1h3a4 4 0 0 0 4 -4v-1a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 2 0 0 1 -2 2h-7a3 3 0 0 1 -3 -3"/>';
 const COMMENT = '<path d="M3 20l1.3 -3.9a9 8 0 1 1 3.4 2.9l-4.7 1"/>';
+const SHARE = '<path d="M6 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 6m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 18m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M8.7 10.7l6.6 -3.4"/><path d="M8.7 13.3l6.6 3.4"/>';
 const CHEV = '<path d="M6 9l6 6l6 -6"/>';
 const id = new URLSearchParams(location.search).get('id') || '';
 const root = document.getElementById('live');
@@ -91,6 +92,15 @@ async function main() {
   const setTitle = (t) => { if (t === titleNow) return; titleNow = t; titleEl.textContent = t; titleBox.title = t; fitTitle(); };   // paint() runs every second: only measure when the text changed
   if ('ResizeObserver' in window) new ResizeObserver(fitTitle).observe(titleBox); else addEventListener('resize', fitTitle);
   document.fonts?.ready?.then(fitTitle);
+  // Share: only while the live is on air, so people can bring others in. The phone's share sheet when there is one, else the link is copied.
+  const shareBtn = document.getElementById('liveShare');
+  shareBtn.replaceChildren(svg(SHARE));
+  shareBtn.onclick = async () => {
+    const url = `${location.origin}/live/?id=${id}`;
+    const title = S.room?.title || S.row.title;
+    if (navigator.share) { try { await navigator.share({ title, text: `${title} is live now`, url }); } catch { /* cancelled */ } return; }
+    try { await navigator.clipboard.writeText(url); toast('Link copied.'); } catch { toast(url); }
+  };
   const stageImg = row.public_thumb_key ? h('img', { src: data.mediaUrl(row.public_thumb_key), alt: '' }) : null;
   const over = h('div', { class: 'l-over' });
   const stage = h('div', { class: 'l-stage' }, stageImg, h('div', { class: 'l-stagebody' }, cardTop, over));
@@ -322,6 +332,7 @@ async function main() {
     const ended = st === 'ended';
     const audioOn = !!S.room?.audio?.online;
     setTitle(S.room?.title || S.row.title);
+    shareBtn.hidden = !live || blocked;
     badge.textContent = live ? '● LIVE' : ended ? 'ENDED' : 'UPCOMING';
     badge.className = 'l-badge' + (live ? ' on' : '');
 

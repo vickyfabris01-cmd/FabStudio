@@ -2,7 +2,7 @@
 import { sb } from '../../shared/supabase.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../../shared/live-settings.js';
 import { db, uid, now } from './db.js';
-import { h, fmtDur, fmtAgo, toast, openModal, popMenu, dotsIcon, eyeIcon, loveIcon, commentIcon } from './ui.js';
+import { h, fmtDur, fmtAgo, toast, openModal, popMenu, dotsIcon, gearIcon, eyeIcon, loveIcon, commentIcon } from './ui.js';
 import { deleteItemFiles } from './api.js';
 import { createSelection, selectBar, tickBox } from './select.js';
 import { engine } from './live-engine.js';
@@ -35,28 +35,62 @@ async function createSession({ title, description, startsAt, settings }) {
   return id;
 }
 
+// "Now" opens the console straight away (you still press Go live there). "Schedule" saves the live with a planned
+// start and stays on the list; the card can be opened any time before then. The settings sit behind the gear and
+// are only opened when something needs to change.
 function newLiveModal(nav) {
   const chosen = { ...DEFAULT_SETTINGS };
+  let mode = 'now';
   const title = h('input', { placeholder: 'Title viewers will see', maxlength: 120 });
   const desc = h('input', { placeholder: 'A line about it (optional)', maxlength: 200 });
-  const when = h('input', { type: 'datetime-local' });
+  const when = h('input', { type: 'datetime-local', 'aria-label': 'Planned start' });
+  const whenBox = h('div', { hidden: true }, when);
+  const startHint = h('p', { class: 'small muted', style: 'margin:0' });
+  const nowBtn = h('button', { class: 'btn primary', type: 'button' }, 'Now');
+  const laterBtn = h('button', { class: 'btn', type: 'button' }, 'Schedule');
   const err = h('p', { class: 'error' });
-  const go = h('button', { class: 'btn primary', type: 'button' }, 'Schedule live');
-  const { close, box } = openModal(h('h3', {}, 'New live'), title, desc,
-    h('label', { class: 'small muted' }, 'Planned start (optional). It only shows a countdown. You still press Go live.'), when,
-    settingsList(chosen, (patch) => Object.assign(chosen, patch), { skip: ['Reactions', 'Host'] }), err,
+  const go = h('button', { class: 'btn primary', type: 'button' });
+  const gear = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Live settings', 'aria-expanded': 'false', title: 'Live settings' }, gearIcon());
+  const panel = h('div', { hidden: true }, settingsList(chosen, (patch) => Object.assign(chosen, patch), { skip: ['Reactions', 'Host'] }));
+  gear.onclick = () => { panel.hidden = !panel.hidden; gear.setAttribute('aria-expanded', String(!panel.hidden)); };
+  const setMode = (m) => {
+    mode = m;
+    nowBtn.className = 'btn' + (m === 'now' ? ' primary' : '');
+    laterBtn.className = 'btn' + (m === 'later' ? ' primary' : '');
+    whenBox.hidden = m !== 'later';
+    startHint.textContent = m === 'now' ? 'Opens the console. You press Go live when you are ready.' : 'Saved as scheduled. Viewers see a countdown. You still press Go live.';
+    go.textContent = m === 'now' ? 'Open console' : 'Schedule live';
+    if (m === 'later') when.focus();
+  };
+  nowBtn.onclick = () => setMode('now');
+  laterBtn.onclick = () => setMode('later');
+  setMode('now');
+  const { close, box } = openModal(
+    h('div', { class: 'row' }, h('h3', { class: 'grow', style: 'margin:0' }, 'New live'), gear),
+    title, desc,
+    h('div', { class: 'row', style: 'gap:.5rem' }, h('span', { class: 'small muted' }, 'Start'), nowBtn, laterBtn),
+    whenBox, startHint, panel, err,
     h('div', { class: 'row', style: 'margin-top:.4rem' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Cancel'), h('span', { class: 'grow' }), go));
   box.classList.add('wide');
   go.onclick = async () => {
     err.textContent = '';
     if (!title.value.trim()) { err.textContent = 'Give it a title.'; return; }
+    let startsAt = null;
+    if (mode === 'later') {
+      if (!when.value) { err.textContent = 'Pick the planned start, or choose Now.'; return; }
+      const at = new Date(when.value);
+      if (at.getTime() < Date.now() - 60000) { err.textContent = 'That time has passed. Pick a time ahead, or choose Now.'; return; }
+      startsAt = at.toISOString();
+    }
     go.disabled = true;
     try {
-      const id = await createSession({ title: title.value.trim(), description: desc.value.trim(), startsAt: when.value ? new Date(when.value).toISOString() : null, settings: chosen });
-      close(); nav.openLive(id);
+      const id = await createSession({ title: title.value.trim(), description: desc.value.trim(), startsAt, settings: chosen });
+      close();
+      if (mode === 'now') nav.openLive(id);
+      else { toast('Live scheduled. Open its card any time to get to the console.'); nav.refresh(); }
     } catch (e) { err.textContent = e.message || String(e); go.disabled = false; }
   };
-  box.querySelector('input').focus();
+  title.focus();
 }
 
 /* ---------- list ---------- */

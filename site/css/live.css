@@ -128,12 +128,17 @@ body.has-dock .foot { display: none; }
 .live-logo-link { justify-self: start; display: inline-flex; line-height: 0; }
 .live-logo { width: 44px; height: 44px; display: block; object-fit: contain; }
 .live-top .chip { justify-self: end; max-width: 11rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.live-title { min-width: 0; overflow: hidden; white-space: nowrap; text-align: center; font-family: var(--serif); font-size: 1.05rem; color: var(--text);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); }
+.live-titlerow { min-width: 0; display: flex; align-items: center; justify-content: center; gap: .15rem; }
+.live-title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-align: center; font-family: var(--serif); font-size: 1.05rem; color: var(--text); }
+.live-title.slide { -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); }   /* the edges only fade while the title slides */
 .live-title > span { display: inline-block; }
 .live-title.slide > span { animation: ltitle var(--t, 8s) linear infinite alternate; }
+.live-share { flex: none; width: 36px; height: 36px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0; }
+.live-share:hover, .live-share:focus-visible { color: var(--text); }
+.live-share[hidden] { display: none; }
+.live-share svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 @keyframes ltitle { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(calc(-1 * var(--d, 0px))); } }
-@media (prefers-reduced-motion: reduce) { .live-title.slide > span { animation: none; } .live-title { text-overflow: ellipsis; -webkit-mask-image: none; mask-image: none; } }
+@media (prefers-reduced-motion: reduce) { .live-title.slide > span { animation: none; } .live-title, .live-title.slide { text-overflow: ellipsis; -webkit-mask-image: none; mask-image: none; } }
 
 /* ---------- after the live: "More from Fabris", 4 random posts in a 2x2 grid (phones too) ---------- */
 .l-more { margin: 1.3rem 0 .6rem; }
