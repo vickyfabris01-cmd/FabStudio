@@ -561,3 +561,11 @@ body.le-open { overflow: hidden; }
 .le-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .le-edit textarea { width: 100%; min-height: 40vh; box-sizing: border-box; }
 @media (min-width: 900px) { .le { padding: 1.2rem 8vw 3rem; } }
+
+/* ---------- Baking console: the take shown in the right-hand pane ---------- */
+.baking-console .c-chat .chat-list { gap: .5rem; }
+.baking-console .c-chat input:disabled, .baking-console .c-chat .btn:disabled { opacity: .45; cursor: default; }
+.bk-take { display: flex; flex-direction: column; gap: .5rem; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.bk-title { font-family: var(--serif); font-size: 1.1rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-note:empty { display: none; }
+.baking-console .c-head .btn.danger { border-color: var(--rec); color: var(--rec); }

@@ -1,13 +1,17 @@
-// Baking: read a poem while the microphone and the poem's background tune are recorded together,
-// then preview the result and, if needed, change the tune volume.
+// Baking: the same console as Live. You read the poem, play its tune through the soundcard, and the soundcard's
+// mixed sound is recorded. The take lands in the right-hand pane as a draft you can play and publish; Done closes it.
 import { db, uid, now } from './db.js';
 import { getBlob, syncSoon } from './sync.js';
 import { startCapture } from './recorder.js';
-import { LiveMix, BAKE_TUNE_VOLUME, loadRemix, Remix, rebake } from './mixer.js';
-import { createDraftFromBake, syncDraftFromBake } from './publish.js';
-import { h, fmtDur, fmtDate, extFor, toast, openModal, micIcon, stopIcon } from './ui.js';
+import { BAKE_TUNE_VOLUME, loadRemix, Remix, rebake } from './mixer.js';
+import { createDraftFromBake, syncDraftFromBake, publishItemNow } from './publish.js';
+import { onPublishJobs, jobFor } from './publisher.js';
+import { h, fmtDur, fmtDate, extFor, toast, openModal } from './ui.js';
 import { LiveAudio, listInputs } from './live-audio.js';
-import { listOutputs } from './console/deck.js';
+import { deck, listOutputs, canChooseOutput } from './console/deck.js';
+import { sourceControl, source } from './console/source.js';
+import { readingPane } from './console/reading.js';
+import { engine } from './live-engine.js';
 
 // Baking is done on a laptop (a screen at least 900px wide), where the sound card gives a proper mix. A phone can
 // still publish, edit and delete everything that was baked.
@@ -16,71 +20,66 @@ function laptopOnlyView(nav) {
   return h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio')),
     h('h2', {}, 'Bake on a laptop'),
-    h('p', { class: 'muted' }, 'Baking mixes your voice with the poem’s tune, and needs a laptop with a proper sound card for a good result. Open the Studio on your laptop to bake. Baked audio already made shows up here, and you can publish, edit or delete it from your phone.'));
+    h('p', { class: 'muted' }, 'Baking records the mix from your sound card, and needs a laptop for a good result. Open the Studio on your laptop to bake. Baked audio already made shows up here, and you can publish, edit or delete it from your phone.'));
 }
 const bakePrefs = () => { try { return JSON.parse(localStorage.getItem('fabstudio.bake') || '{}'); } catch { return {}; } };
 const saveBakePrefs = (p) => { try { localStorage.setItem('fabstudio.bake', JSON.stringify({ ...bakePrefs(), ...p })); } catch { /* ignore */ } };
-
 const poemName = (p) => p.title || (p.stanzas?.[0] || '').split('\n')[0] || 'Untitled';
+const clock = (s) => { s = Math.max(0, Math.floor(s)); const m = Math.floor(s / 60); return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 
-/* ---------- step 1: choose a poem ---------- */
-async function pickPoemView(nav) {
-  if (!isLaptop()) return laptopOnlyView(nav);
-  const rows = (await db.poems.toArray()).filter((p) => !p.deletedAt).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-  return h('section', { class: 'view' },
-    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', onclick: () => nav.back() }, '← Studio')),
-    h('h2', {}, 'Bake a poem'),
-    h('p', { class: 'muted small' }, 'Pick the poem to read. Use headphones so the tune is not recorded twice.'),
-    rows.length
-      ? h('ul', { class: 'list' }, rows.map((p) => h('li', { class: 'item', onclick: () => nav.pickBake(p.id) },
-          h('div', { class: 'grow' }, h('div', { class: 'title' }, poemName(p)), h('div', { class: 'sub' }, `${p.stanzas?.length || 0} stanzas`)))))
-      : h('p', { class: 'empty' }, 'No poems yet. Write one in the Poems tab first.'));
-}
-
-// Opens the microphone the phone picks by itself: an external one when it is connected, otherwise the built-in one.
-// Baking always uses raw audio (no voice processing). With voice processing on, Android switches to call mode and
-// plays the background tune like a call instead of through the soundcard. The tune is mixed digitally, so the
-// echo cancellation is not needed (use headphones).
-function openMic() {
-  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-}
-
-/* ---------- step 2: the baking page ---------- */
+/* ---------- the baking console ---------- */
+// Same pieces as the live console: header row, sound strip, reading pane (poem, tune, play row) and the right-hand
+// pane. Here the right-hand pane starts empty and shows the take once it is saved.
 export async function bakerView({ poemId, nav }) {
   if (!isLaptop()) return laptopOnlyView(nav);
-  if (!poemId) return pickPoemView(nav);
-  const poem = await db.poems.get(poemId);
-  if (!poem || poem.deletedAt) { nav.back(); return h('section', { class: 'view' }); }
+  if (engine.active) { toast('A live is on air. End it before baking.'); nav.back(); return h('section', { class: 'view' }); }
 
-  const tuneRow = poem.tuneId ? await db.tunes.get(poem.tuneId) : null;
-  const tune = tuneRow && !tuneRow.deletedAt ? tuneRow : null;
-  let tuneBlob = null;
-  if (tune) {
-    tuneBlob = await getBlob('tunes', tune);
-    if (!tuneBlob) toast('The tune is not on this device yet. Connect to download it. Baking without it for now.');
-  }
-  const mix = new LiveMix(tuneBlob, BAKE_TUNE_VOLUME);
-  try { await mix.load(); } catch { mix.tuneBuf = null; toast('The tune could not be read. Baking without it.'); }
-  const hasTune = !!mix.tuneBuf;
+  const root = h('div', { class: 'console baking-console' });
+  const src = sourceControl();                 // the same Poem picker as the live console
+  src.el.querySelector('.src-mode option[value="music"]')?.remove();   // baking is for poems
+  source.setMode('poem');
+  source.setPoem(poemId || '');                // nothing is loaded until you pick it
+  const reading = await readingPane();
 
-  /* the sound strip, the same one the live console uses: input, gain, level, output */
+  /* ----- state ----- */
   const audioIn = new LiveAudio();
   let armed = false;
+  let session = null; let recording = false; let saving = false; let starting = null;
+  let t0 = 0; let recPoemId = '';
+  let take = null;                             // { bakeId, itemId, title, duration, blob }
+  let takeAudio = null; let takeUrl = '';
+  const offs = [];
+
+  /* ----- header: back, poem picker, status, clock, record, done ----- */
+  const status = h('span', { class: 'badge' });
+  const timer = h('b', { class: 'c-clock' });
+  const rec = h('button', { class: 'btn small', type: 'button' });
+  const done = h('button', { class: 'btn small primary', type: 'button', hidden: true }, 'Done');
+  const back = h('button', { class: 'btn small', type: 'button', onclick: () => {
+    if (recording || saving) return toast('Stop the recording first.');
+    leave();
+  } }, '‹ Studio');
+  const head = h('div', { class: 'card c-head' },
+    h('div', { class: 'row c-headrow' }, back, h('div', { class: 'grow' }, src.el), status, timer, rec, done));
+  const barTitle = h('span', { class: 'bar-title', style: 'cursor:default' });
+
+  /* ----- sound strip: level, gain, volume, input, output ----- */
   const inSel = h('select', { 'aria-label': 'Audio input' });
-  const outSel = h('select', { 'aria-label': 'Audio output (where you hear the tune)' });
-  const gain = h('input', { type: 'range', min: 0, max: 2, step: 0.05, value: String(bakePrefs().gain ?? 1), 'aria-label': 'Input gain' });
+  const outSel = h('select', { 'aria-label': 'Audio output' });
   const meterFill = h('div', { class: 'meter-fill' });
   const soundMsg = h('p', { class: 'small error' });
+  const gain = h('input', { type: 'range', min: 0, max: 2, step: 0.05, value: String(bakePrefs().gain ?? 1), 'aria-label': 'Input gain' });
+  const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: deck.s.volume, 'aria-label': 'Volume of the poem tune' });
+  const volText = h('span', { class: 'small muted c-voltxt' }, '100%');
   gain.oninput = () => { audioIn.setGain(Number(gain.value)); saveBakePrefs({ gain: Number(gain.value) }); };
+  vol.oninput = () => deck.setVolume(Number(vol.value));
   const fillDevices = async () => {
     const ins = await listInputs();
     inSel.replaceChildren(h('option', { value: '' }, 'Default input'), ...ins.map((i) => h('option', { value: i.id }, i.label)));
     inSel.value = ins.some((i) => i.id === bakePrefs().inId) ? bakePrefs().inId : '';
     const outs = await listOutputs();
     outSel.replaceChildren(h('option', { value: '' }, 'Default output'), ...outs.filter((o) => o.id !== 'default').map((o) => h('option', { value: o.id }, o.label)));
-    outSel.value = outs.some((o) => o.id === bakePrefs().outId) ? bakePrefs().outId : '';
-    outSel.disabled = !mix.ctx.setSinkId;
-    if (outSel.disabled) outSel.title = 'This browser cannot choose an output. Use Chrome or Edge.';
+    outSel.value = outs.some((o) => o.id === deck.s.outId) ? deck.s.outId : '';
   };
   const arm = async (deviceId) => {
     try {
@@ -93,99 +92,91 @@ export async function bakerView({ poemId, nav }) {
     } catch (e) { soundMsg.textContent = e.name === 'NotAllowedError' ? 'The browser blocked the microphone.' : (e.message || String(e)); return false; }
   };
   inSel.onchange = () => arm(inSel.value);
-  outSel.onchange = async () => {
-    saveBakePrefs({ outId: outSel.value });
-    try { await mix.ctx.setSinkId(outSel.value); soundMsg.textContent = ''; } catch (e) { soundMsg.textContent = 'Could not use that output: ' + (e.message || e.name); }
-  };
-  const meterTimer = setInterval(() => { meterFill.style.width = Math.round((armed ? audioIn.level() : 0) * 100) + '%'; }, 100);
-  fillDevices().then(async () => {
-    if (bakePrefs().outId && mix.ctx.setSinkId) mix.ctx.setSinkId(bakePrefs().outId).catch(() => {});
-    await arm(inSel.value);       // opens the sound card so the level shows before you record
-  });
+  outSel.onchange = async () => { try { await deck.setOutput(outSel.value); soundMsg.textContent = ''; } catch (e) { soundMsg.textContent = 'Could not use that output: ' + (e.message || e.name); } };
+  outSel.disabled = !canChooseOutput();
+  if (outSel.disabled) outSel.title = 'This browser cannot choose an output. Use Chrome or Edge.';
   const sound = h('section', { class: 'card c-sound' },
     h('div', { class: 'row c-soundrow' },
       h('span', { class: 'small muted' }, 'Level'), h('div', { class: 'meter c-meter' }, meterFill),
       h('span', { class: 'small muted' }, 'Gain'), h('div', { style: 'width:100px' }, gain),
+      h('span', { class: 'small muted' }, 'Vol'), h('div', { style: 'width:100px' }, vol), volText,
       h('span', { class: 'small muted' }, 'In'), h('div', { class: 'c-sel' }, inSel),
       h('span', { class: 'small muted' }, 'Out'), h('div', { class: 'c-sel' }, outSel)),
     soundMsg);
-  // Scroll the poem for you while you read.
-  const auto = h('input', { type: 'checkbox', 'aria-label': 'Scroll the poem for me' });
-  const speed = h('input', { type: 'range', min: 5, max: 120, step: 5, value: '30', 'aria-label': 'Scroll speed' });
-  let scrollRaf = 0; let lastT = 0; let acc = 0;
-  const scrollStep = (t) => {
-    scrollRaf = 0;
-    if (!auto.checked) return;
-    if (lastT) { acc += (Number(speed.value) * (t - lastT)) / 1000; const whole = Math.trunc(acc); if (whole) { window.scrollBy(0, whole); acc -= whole; } }
-    lastT = t;
-    scrollRaf = requestAnimationFrame(scrollStep);
-  };
-  auto.onchange = () => { lastT = 0; if (auto.checked && !scrollRaf) scrollRaf = requestAnimationFrame(scrollStep); };
-  const scrollRow = h('label', { class: 'row small' }, auto, h('span', {}, 'Scroll the poem for me'), h('div', { style: 'width:110px' }, speed));
-  const cleanup = () => { clearInterval(meterTimer); cancelAnimationFrame(scrollRaf); audioIn.stop(); };
+  const meterTimer = setInterval(() => {
+    const lv = armed ? audioIn.level() : 0;
+    meterFill.style.width = Math.round(lv * 100) + '%';
+    meterFill.classList.toggle('hot', lv > 0.92);
+  }, 100);
 
-  let stream = null;
-  let session = null;
-  let recording = false;
-  let saving = false;
-  let starting = null;
-  let capDelay = 0;
-  let t0 = 0;
-  let tick = null;
-  let micShown = '';
+  /* ----- right-hand pane: the chat pane, empty and greyed; the take appears in it once saved ----- */
+  const feed = h('div', { class: 'chat-list', role: 'log' });
+  const chatIn = h('input', { placeholder: 'Say something as the host…', maxlength: 300, 'aria-label': 'Message', disabled: true });
+  const sendBtn = h('button', { class: 'btn small', type: 'button', disabled: true }, 'Send');
+  const composer = h('div', { class: 'row' }, h('div', { class: 'grow' }, chatIn), sendBtn);
+  const chat = h('section', { class: 'card c-chat' },
+    h('div', { class: 'row c-tabs' }, h('button', { class: 'tab on', type: 'button' }, 'Chats'), h('span', { class: 'grow' })),
+    feed, composer);
 
-  /* the tune, shown like a file chip on the poem page */
-  const chipIc = h('span', { class: 'chip-ic', 'aria-hidden': 'true' }, '▶');
-  const chipSub = h('span', { class: 'chip-s' }, 'ready');
-  const chipBtn = h('button', { class: 'chip-main', type: 'button', 'aria-label': 'Start the tune' },
-    chipIc, h('span', {}, tune?.title || 'Tune'), chipSub);
-  const chip = h('div', { class: 'chip', style: 'min-width:0' }, chipBtn);
+  /* ----- the saved take: play, status, publish ----- */
+  function showTake() {
+    const playBtn = h('button', { class: 'btn small rd-play', type: 'button', 'aria-label': 'Play' }, '▶');
+    const seek = h('input', { type: 'range', min: 0, max: Math.max(1, Math.round(take.duration || 1)), value: 0, step: 1, 'aria-label': 'Position', class: 'rd-seek' });
+    const time = h('span', { class: 'muted small rd-time' }, `0:00 / ${fmtDur(take.duration)}`);
+    const badge = h('span', { class: 'badge' });
+    const pubBtn = h('button', { class: 'btn primary small', type: 'button' }, 'Publish');
+    const note = h('p', { class: 'small error bk-note' });
+    takeUrl = URL.createObjectURL(take.blob);
+    takeAudio = new Audio(takeUrl);
+    const paintPos = () => {
+      const a = takeAudio; if (!a) return;
+      const dur = Number.isFinite(a.duration) && a.duration ? a.duration : take.duration;
+      if (document.activeElement !== seek) seek.value = Math.round(a.currentTime);
+      time.textContent = `${fmtDur(a.currentTime)} / ${fmtDur(dur)}`;
+      playBtn.textContent = a.paused ? '▶' : '❚❚';
+      playBtn.setAttribute('aria-label', a.paused ? 'Play' : 'Pause');
+    };
+    takeAudio.ontimeupdate = paintPos; takeAudio.onended = () => { takeAudio.currentTime = 0; paintPos(); }; takeAudio.onpause = paintPos; takeAudio.onplay = paintPos;
+    playBtn.onclick = () => { if (takeAudio.paused) { deck.pause(); takeAudio.play().catch(() => toast('The browser did not start the audio.')); } else takeAudio.pause(); };
+    seek.oninput = () => { takeAudio.currentTime = Number(seek.value); paintPos(); };
 
-  /* the record button, to the right of the tune */
-  const micBtn = h('button', { class: 'fab rec', type: 'button', 'aria-label': 'Start recording', style: 'position:static;box-shadow:none;flex:none' });
-  const timeLabel = h('span', { class: 'fab-t' }, '0:00');
+    const refresh = async () => {
+      const row = await db.items.get(take.itemId);
+      const job = jobFor(take.itemId);
+      const busy = !!job && ['queued', 'running', 'waiting'].includes(job.state);
+      const isPub = row?.status === 'published';
+      badge.textContent = isPub ? 'Published' : busy ? `${job.label || 'Publishing'} ${job.pct || 0}%` : 'Draft';
+      badge.dataset.status = isPub ? 'published' : 'draft';
+      pubBtn.hidden = isPub;
+      pubBtn.disabled = busy;
+      note.textContent = !busy && !isPub && job?.error ? job.error : '';
+    };
+    pubBtn.onclick = async () => {
+      pubBtn.disabled = true; note.textContent = '';
+      try { await publishItemNow(take.itemId, take.title); } catch (e) { note.textContent = e.message || String(e); }
+      refresh();
+    };
+    offs.push(onPublishJobs((j) => { if (j.id === take.itemId) refresh(); }));
+    const poll = setInterval(refresh, 3000); offs.push(() => clearInterval(poll));
+    refresh();
 
-  const paint = () => {
-    if (recording) {
-      if (micShown !== 'live') {
-        micShown = 'live';
-        micBtn.classList.add('live');
-        micBtn.replaceChildren(stopIcon(), timeLabel);
-        micBtn.setAttribute('aria-label', 'Stop recording');
-      }
-      timeLabel.textContent = fmtDur((Date.now() - t0) / 1000);
-    } else if (micShown !== 'idle') {
-      micShown = 'idle';
-      micBtn.classList.remove('live');
-      micBtn.replaceChildren(micIcon());
-      micBtn.setAttribute('aria-label', 'Start recording');
-    }
-    if (hasTune) {
-      const playing = mix.tunePlaying;
-      const done = !playing && mix.tuneOffset != null;
-      chipIc.textContent = playing ? '♪' : done ? '✓' : '▶';
-      chipSub.textContent = playing ? 'playing' : done ? 'finished' : 'ready';
-    }
-  };
+    feed.replaceChildren(h('div', { class: 'bk-take' },
+      h('div', { class: 'row' }, h('b', { class: 'bk-title grow' }, take.title), badge),
+      h('div', { class: 'small muted' }, `Baked audio, ${fmtDur(take.duration)}. Saved as a draft in Studio.`),
+      h('div', { class: 'row rd-row' }, playBtn, time, h('div', { class: 'grow' }, seek)),
+      h('div', { class: 'row' }, pubBtn), note));
+  }
 
+  /* ----- recording: the soundcard's mixed sound, as it comes in ----- */
   const begin = async () => {
+    if (!source.poemId) { toast('Choose a poem first.'); return false; }
     if (!navigator.mediaDevices?.getUserMedia) { toast('Recording is not available in this browser.'); return false; }
     if (!armed && !(await arm(inSel.value))) { toast(soundMsg.textContent || 'The sound card could not be opened.'); return false; }
-    stream = audioIn.stream;
-    try {
-      await mix.begin(stream);
-      session = await startCapture({ poemId, stream, raw: true });
-    } catch (e) {
-      stream.getTracks().forEach((tr) => tr.stop());
-      toast('Could not start recording: ' + (e.message || e));
-      return false;
-    }
-    capDelay = mix.ctx.currentTime - mix.t0;
-    recording = true;
-    t0 = Date.now();
-    tick = setInterval(paint, 250);
+    try { session = await startCapture({ poemId: source.poemId, stream: audioIn.stream, raw: true }); }
+    catch (e) { toast('Could not start recording: ' + (e.message || e)); return false; }
+    recPoemId = source.poemId;
+    recording = true; t0 = Date.now();
     paint();
-    toast('Recording with ' + (stream.getAudioTracks()[0]?.label || 'the default microphone'));
     return true;
   };
   const ensureRecording = () => {
@@ -193,93 +184,91 @@ export async function bakerView({ poemId, nav }) {
     if (!starting) starting = begin().finally(() => { starting = null; });
     return starting;
   };
-
-  // Tap the tune: the microphone starts too (if it is not already running), then the tune plays once.
-  chipBtn.onclick = async () => {
-    if (!hasTune) return;
-    if (mix.tunePlaying) return toast('The tune is playing.');
-    if (mix.tuneOffset != null) return toast('The tune plays once for each bake.');
-    if (!(await ensureRecording())) return;
-    mix.startTune();
-    paint();
-  };
-  mix.onTuneEnd = () => paint();
+  // Starting the poem's tune also starts the recording (as the baking page always did).
+  offs.push(deck.onStart((d) => { if (d.source === 'poem' && d.fresh && !recording && !saving && !take) ensureRecording().then((ok) => { if (!ok) deck.pause(); }); }));
 
   const stopAndSave = async () => {
     if (saving) return;
-    saving = true;
-    clearInterval(tick);
-    micBtn.disabled = true;
-    let out = null;
+    saving = true; paint();
+    deck.pause();
     let capId = null;
-    try {
-      out = await mix.finish();
-      capId = await session.stop();
-    } catch (e) {
-      toast('Saving failed: ' + (e.message || e));
-    }
-    cleanup();
-    recording = false;
-    if (!out || !out.blob.size) { toast('Nothing was recorded.'); return nav.back(); }
+    try { capId = await session.stop(); } catch (e) { toast('Saving failed: ' + (e.message || e)); }
+    recording = false; session = null;
     const cap = capId ? await db.captures.get(capId) : null;
-    const bid = uid();
-    const t = now();
-    const tuneUsed = out.tuneOffset != null && tune;
+    if (!cap || !cap.blob || !cap.blob.size) { toast('Nothing was recorded.'); saving = false; paint(); return; }
+    const poem = await db.poems.get(recPoemId);
+    const bid = uid(); const t = now();
     const bake = {
-      id: bid, poemId, captureId: cap ? capId : null, tuneId: tuneUsed ? tune.id : null, tuneVolume: BAKE_TUNE_VOLUME,
-      tuneOffset: tuneUsed ? Math.max(0, out.tuneOffset - capDelay) : null,
-      mime: out.mime, duration: out.duration, blob: out.blob, r2Key: `bakes/${bid}.${extFor(out.mime)}`,
+      id: bid, poemId: recPoemId, captureId: null, tuneId: null, tuneVolume: null, tuneOffset: null,
+      mime: cap.mime, duration: cap.duration, blob: cap.blob, r2Key: `bakes/${bid}.${extFor(cap.mime)}`,
       createdAt: t, updatedAt: t, dirty: 1, blobPending: 1,
     };
     await db.bakes.put(bake);
-    try { await createDraftFromBake(bake); } catch (e) { toast('Baked, but the Studio draft could not be made: ' + (e.message || e)); }
+    // the same sound is now the baked file, so the separate recording is removed instead of being uploaded twice
+    await db.captures.where('id').equals(capId).modify((c) => { c.deletedAt = now(); c.updatedAt = now(); c.dirty = 1; c.blobPending = 0; delete c.blob; });
+    let itemId = null;
+    try { itemId = await createDraftFromBake(bake); } catch (e) { toast('Baked, but the Studio draft could not be made: ' + (e.message || e)); }
     syncSoon();
-    openBakeModal(bid, { onDone: () => nav.back() });
+    saving = false;
+    if (!itemId) { toast('Saved. Find it in Studio.'); return leave(); }
+    take = { bakeId: bid, itemId, title: poem && !poem.deletedAt ? poemName(poem) : 'Baked poem', duration: cap.duration, blob: cap.blob };
+    showTake();
+    paint();
   };
 
-  // Tap the mic: start recording. Tap again: stop and save.
-  micBtn.onclick = async () => {
-    if (saving || starting) return;
+  rec.onclick = async () => {
+    if (saving || starting || take) return;
     if (!recording) { await ensureRecording(); return; }
-    if (Date.now() - t0 < 800) return; // ignore an accidental double tap
+    if (Date.now() - t0 < 800) return;   // ignore an accidental double tap
     stopAndSave();
   };
 
-  const back = h('button', {
-    class: 'btn small', type: 'button',
-    onclick: () => {
-      if (recording) return toast('Stop the recording first.');
-      mix.dispose();
-      cleanup();
-      nav.back();
-    },
-  }, '← Studio');
+  function leave() {
+    if (recording || saving) return;
+    nav.back();
+  }
+  done.onclick = () => leave();
 
-  const controls = h('div', {
-    class: 'bake-controls',
-    style: 'position:sticky;top:3.6rem;z-index:4;background:var(--bg);display:flex;align-items:center;gap:.7rem;padding:.6rem 0;border-bottom:1px solid var(--line)',
-  }, hasTune ? chip : null, micBtn);
+  /* ----- painting ----- */
+  const paint = () => {
+    status.textContent = recording ? '● REC' : saving ? 'Saving…' : take ? 'Saved' : 'Ready';
+    status.className = 'badge' + (recording ? ' onair' : '');
+    timer.textContent = recording ? clock((Date.now() - t0) / 1000) : '';
+    rec.hidden = !!take; done.hidden = !take;
+    rec.className = 'btn small' + (recording ? ' danger' : '');
+    rec.textContent = recording ? '■ Stop' : '● Record';
+    rec.disabled = saving;
+    back.disabled = saving;
+    const locked = recording || saving || !!take;   // the poem cannot change while recording or after the take
+    src.el.querySelectorAll('select, .src-name').forEach((e) => { e.disabled = locked; });
+    volText.textContent = `${Math.round(deck.s.volume * 100)}%`;
+    if (document.activeElement !== vol) vol.value = deck.s.volume;
+    reading.paint();
+  };
+  const paintTitle = async () => {
+    const p = source.poemId ? await db.poems.get(source.poemId) : null;
+    barTitle.textContent = p && !p.deletedAt ? poemName(p) : '';
+  };
+  offs.push(source.on(paintTitle), deck.on(paint));
+  const tick = setInterval(paint, 500);
 
+  root.append(head, sound, h('div', { class: 'c-split' }, reading.el, chat));
+  root._dispose = () => {
+    clearInterval(tick); clearInterval(meterTimer);
+    for (const off of offs) { try { off(); } catch { /* ignore */ } }
+    try { deck.pause(); } catch { /* ignore */ }
+    try { takeAudio?.pause(); URL.revokeObjectURL(takeUrl); } catch { /* ignore */ }
+    reading.dispose(); src.dispose(); barTitle.remove();
+    if (!recording) audioIn.stop();
+  };
+
+  fillDevices().then(() => arm(inSel.value));   // opens the sound card so the level shows before you record
+  await paintTitle();
   paint();
-  const el = h('section', { class: 'view' },
-    h('div', { class: 'toolbar' }, back, h('span', { class: 'status' }, 'Baking')),
-    h('h2', {}, poemName(poem)),
-    controls,
-    sound, scrollRow,
-    h('p', { class: 'muted small', style: 'margin:.5rem 0 0' }, hasTune
-      ? 'Tap the tune to start it and the microphone together, or tap the red mic first and start the tune later. Use headphones.'
-      : 'No background tune for this poem. Tap the red mic to record.'),
-    h('div', { class: 'bake-text' }, (poem.stanzas || []).join('\n\n') || 'This poem has no text yet.'),
-    h('div', { class: 'spacer' }));
-
-  // Keep the controls just under the app header while the poem scrolls.
-  setTimeout(() => {
-    const bar = document.querySelector('.bar');
-    if (bar) controls.style.top = `calc(${bar.offsetHeight}px + env(safe-area-inset-top))`;
-  }, 0);
-
-  el._dispose = () => { if (!recording) { mix.dispose(); cleanup(); } };
-  return el;
+  // The poem name sits in the app's top bar, between the name and the Synced pill, like the live title.
+  const topBar = document.querySelector('.bar');
+  if (topBar) topBar.insertBefore(barTitle, topBar.querySelector('.pill'));
+  return root;
 }
 
 /* ---------- the preview modal ---------- */
