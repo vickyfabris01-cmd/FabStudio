@@ -92,15 +92,6 @@ async function main() {
   const setTitle = (t) => { if (t === titleNow) return; titleNow = t; titleEl.textContent = t; titleBox.title = t; fitTitle(); };   // paint() runs every second: only measure when the text changed
   if ('ResizeObserver' in window) new ResizeObserver(fitTitle).observe(titleBox); else addEventListener('resize', fitTitle);
   document.fonts?.ready?.then(fitTitle);
-  // Share: only while the live is on air, so people can bring others in. The phone's share sheet when there is one, else the link is copied.
-  const shareBtn = document.getElementById('liveShare');
-  shareBtn.replaceChildren(svg(SHARE));
-  shareBtn.onclick = async () => {
-    const url = `${location.origin}/live/?id=${id}`;
-    const title = S.room?.title || S.row.title;
-    if (navigator.share) { try { await navigator.share({ title, text: `${title} is live now`, url }); } catch { /* cancelled */ } return; }
-    try { await navigator.clipboard.writeText(url); toast('Link copied.'); } catch { toast(url); }
-  };
   const stageImg = row.public_thumb_key ? h('img', { src: data.mediaUrl(row.public_thumb_key), alt: '' }) : null;
   const over = h('div', { class: 'l-over' });
   const stage = h('div', { class: 'l-stage' }, stageImg, h('div', { class: 'l-stagebody' }, cardTop, over));
@@ -112,12 +103,14 @@ async function main() {
   // pills: views, love (a count), and the Request list
   const viewsPill = h('span', { class: 'l-pill' }, svg(EYE), h('b', { class: 'n' }));
   const lovePill = h('span', { class: 'l-pill love' }, svg(LOVE), h('b', { class: 'n' }));
+  // Share: opens the phone's share sheet (or copies the link). The link carries this person's short id, so the host can see who brought whom in.
+  const shareBtn = h('button', { class: 'l-pill', type: 'button', 'aria-label': 'Share this live' }, svg(SHARE), h('span', {}, 'Share'));
   const reqBtn = h('button', { class: 'l-pill req', type: 'button', 'aria-haspopup': 'listbox' }, h('span', {}, 'Request'), svg(CHEV));
   // the Request list: the first six poems show, the rest are reached by scrolling the list; "Other poem…" stays pinned under it
   const reqList = h('div', { class: 'l-menulist' });
   const reqOther = h('button', { type: 'button', role: 'option', class: 'other', onclick: () => { S.reqMode = true; S.menu = false; paint(); chatIn.focus(); } }, 'Other poem…');
   const reqMenu = h('div', { class: 'l-menu', role: 'listbox', hidden: true }, reqList, reqOther);
-  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
+  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, shareBtn, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
 
   const feed = h('div', { class: 'l-feed', role: 'log', 'aria-live': 'polite' });
 
@@ -164,7 +157,7 @@ async function main() {
 
   /* ----- room ----- */
   const room = connectRoom({
-    item: id, getToken: token,
+    item: id, getToken: token, ref: new URLSearchParams(location.search).get('ref') || '',
     onStatus: (c) => { S.conn = c; paint(); },
     onMessage: (m) => {
       if (m.t === 'state') {
@@ -178,6 +171,7 @@ async function main() {
       else if (m.t === 'chatDel') S.chat = S.chat.filter((c) => c.id !== m.id);
       else if (m.t === 'count') { if (S.room) S.room.watching = m.watching; }
       else if (m.t === 'love') onLove(m);
+      else if (m.t === 'thanks') toast(`Thank you for inviting ${m.name || 'a friend'}. They just joined through your link.`);
       else if (m.t === 'poems') S.poems = Array.isArray(m.titles) ? m.titles : [];
       else if (m.t === 'show') S.show = { on: !!m.on, poem: m.poem || '', playing: m.playing || '' };
       else if (m.t === 'err') { if (ERR[m.code]) toast(m.code === 'slow' && m.wait ? `Slow mode: wait ${m.wait}s.` : ERR[m.code]); }
@@ -286,6 +280,26 @@ async function main() {
     if (S.pending > 0) S.loveTimer = setTimeout(flushLove, 400);
   }
   loveBtn.onclick = tapLove;
+  // The link to share. It keeps this person's short id, never anything private, so a friend's arrival can be credited to them.
+  const shareUrl = () => {
+    const u = new URL('/live/', location.origin);
+    u.searchParams.set('id', id);
+    const uid = (S.room?.you?.uid || '').replace(/-/g, '').slice(0, 8);
+    if (/^[0-9a-f]{8}$/i.test(uid)) u.searchParams.set('ref', uid);
+    return u.toString();
+  };
+  shareBtn.onclick = async () => {
+    const t = S.room?.title || S.row.title;
+    const url = shareUrl();
+    let done = false;
+    if (navigator.share) {
+      try { await navigator.share({ title: t, text: `${t} is live now. Join me.`, url }); done = true; }
+      catch (e) { if (e?.name !== 'AbortError') { try { await navigator.clipboard.writeText(url); toast('Link copied.'); done = true; } catch { toast(url); } } }
+    } else {
+      try { await navigator.clipboard.writeText(url); toast('Link copied.'); done = true; } catch { toast(url); }
+    }
+    if (done) room.send({ t: 'share' });
+  };
   // One line per person for a burst: "♥ Amina ×5". Rapid bursts update the same line.
   function onLove(m) {
     S.loveTotal = Math.max(S.loveTotal || 0, m.all || 0);
@@ -332,7 +346,6 @@ async function main() {
     const ended = st === 'ended';
     const audioOn = !!S.room?.audio?.online;
     setTitle(S.room?.title || S.row.title);
-    shareBtn.hidden = !live || blocked;
     badge.textContent = live ? '● LIVE' : ended ? 'ENDED' : 'UPCOMING';
     badge.className = 'l-badge' + (live ? ' on' : '');
 
@@ -376,6 +389,7 @@ async function main() {
     lovePill.hidden = !reactOn;
     lovePill.querySelector('.n').textContent = showCounts ? String(Math.max(0, live ? (S.loveTotal ?? 0) : (S.row.n_love || 0))) : '';
     const askShown = live && settings.requestsEnabled !== false;
+    shareBtn.hidden = false;
     reqBtn.hidden = !askShown;
     reqBtn.classList.toggle('open', S.menu);
     reqMenu.hidden = !(S.menu && askShown);

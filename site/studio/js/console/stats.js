@@ -1,7 +1,7 @@
-// The three live counts: Views, Watching, Love. They sit in the chat header as one slim row (icon + number,
+// The live counts: Views, Watching, Love, Shares. They sit in the chat header as one slim row (icon + number,
 // no boxes). Hover shows the name. +1 floats up on a new view or watcher, and -1 floats away when someone leaves.
 // All counts are for this live.
-import { h, eyeIcon, loveIcon } from '../ui.js';
+import { h, eyeIcon, loveIcon, shareIcon } from '../ui.js';
 
 export function statCards(engine) {
   const mk = (icon, label) => {
@@ -11,7 +11,8 @@ export function statCards(engine) {
   const views = mk(eyeIcon(14), 'Views'); const watching = mk(h('span', { class: 'stat-live', 'aria-hidden': 'true' }), 'Watching now');
   const love = mk(loveIcon(14), 'Love');
   love.el.classList.add('is-love');
-  const el = h('div', { class: 'c-stats' }, views.el, watching.el, love.el);
+  const shares = mk(shareIcon(14), 'Shares');
+  const el = h('div', { class: 'c-stats' }, views.el, watching.el, love.el, shares.el);
   let pv = null; let pw = null;
 
   const float = (card, diff) => {
@@ -26,6 +27,7 @@ export function statCards(engine) {
     views.v.textContent = String(s.views);
     watching.v.textContent = s.watching == null ? '–' : String(s.watching);
     love.v.textContent = String(s.love);
+    shares.v.textContent = String(s.shares || 0);
     if (pv != null) float(views.el, s.views - pv);
     if (pw != null && s.watching != null) float(watching.el, s.watching - pw);
     pv = s.views; pw = s.watching == null ? pw : s.watching;

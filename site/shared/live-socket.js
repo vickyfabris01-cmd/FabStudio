@@ -6,7 +6,8 @@ export const roomUrl = (item) => `${CONFIG.API_BASE.replace(/^http/, 'ws')}/live
 
 // onStatus gets 'connecting' | 'open' | 'reconnecting' | 'closed'. onMessage gets each parsed message.
 // Pass console: true from FabStudio so the room knows this is the host's console.
-export function connectRoom({ item, getToken, console: asConsole = false, onMessage, onStatus = () => {} }) {
+// Pass ref (from an invite link) on the public page so the room can tell the host who invited this person.
+export function connectRoom({ item, getToken, console: asConsole = false, ref = '', onMessage, onStatus = () => {} }) {
   let ws = null;
   let closed = false;
   let tries = 0;
@@ -15,7 +16,7 @@ export function connectRoom({ item, getToken, console: asConsole = false, onMess
 
   const hello = async () => {
     const token = await getToken();
-    if (token && ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'hello', token, console: asConsole }));
+    if (token && ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'hello', token, console: asConsole, ...(ref ? { ref } : {}) }));
   };
 
   const later = () => {
@@ -36,7 +37,7 @@ export function connectRoom({ item, getToken, console: asConsole = false, onMess
     const mine = ws;
     mine.onopen = () => {
       tries = 0;
-      mine.send(JSON.stringify({ t: 'hello', token, console: asConsole }));
+      mine.send(JSON.stringify({ t: 'hello', token, console: asConsole, ...(ref ? { ref } : {}) }));
       onStatus('open');
       clearInterval(beat);
       beat = setInterval(() => { if (mine.readyState === 1) mine.send('{"t":"ping"}'); }, 25000);

@@ -15,7 +15,7 @@ const fresh = () => ({
   conn: 'closed',                    // room connection: connecting | open | reconnecting | closed
   room: null,                        // last 'state' message from the room
   chat: [], watching: null, peak: 0, pulses: { love: 0, like: 0 },
-  baseSeq: null, views: 0, love: 0,                 // this live's views (new ones only) and Love taps
+  baseSeq: null, views: 0, love: 0, shares: 0,      // this live's views (new ones only), Love taps and shares
   events: [], seq: 0,                // lines only the host sees (joined, love bursts); seq numbers every feed line
   lovePulse: { n: 0, k: 0 },         // k goes up on every real Love message, so the chat pane can float hearts (n = taps in it)
   show: { title: false, poem: '', playing: '' },   // what viewers may see (the room enforces show-title)
@@ -92,6 +92,7 @@ class LiveEngine extends EventTarget {
         if (typeof m.watching === 'number') s.watching = m.watching;
         if (typeof m.peak === 'number') s.peak = Math.max(s.peak, m.peak);
         if (typeof m.loveTotal === 'number') s.love = Math.max(s.love, m.loveTotal);
+        if (typeof m.shares === 'number') s.shares = Math.max(s.shares, m.shares);
         this.noteRequests(m.requests);
         if (m.status === 'ended' && s.phase !== 'ended') this.finish();
         break;
@@ -106,7 +107,11 @@ class LiveEngine extends EventTarget {
       case 'count': s.watching = m.watching; if (typeof m.peak === 'number') s.peak = m.peak; break;
       case 'react': s.pulses = { love: s.pulses.love + (m.love || 0), like: s.pulses.like + (m.like || 0) }; break;
       case 'love': this.noteLove(m); break;
-      case 'joined': this.pushEvent({ kind: 'joined', name: m.name, uid8: m.uid8 }); break;
+      case 'joined': this.pushEvent({ kind: 'joined', name: m.name, uid8: m.uid8, ...(m.via ? { via: m.via } : {}) }); break;
+      case 'shared':
+        if (typeof m.all === 'number') s.shares = Math.max(s.shares, m.all);
+        this.pushEvent({ kind: 'shared', name: m.name, uid8: m.uid8, total: m.total });
+        break;
       case 'view': s.views += 1; break;
       case 'views': if (typeof m.n === 'number') s.views = Math.max(s.views, m.n); break;   // the real total from the database
       case 'taken':

@@ -22,6 +22,9 @@ const LOVE_BATCH = 12;        // taps accepted in one love message (the page bat
 const LOVE_GAP_MS = 250;      // love messages from one person closer than this are dropped without an error
 const MAX_LOVERS = 5000;      // people whose love totals are kept in the room
 const MAX_JOINED = 5000;      // people remembered for "joined" notices
+const MAX_SHARERS = 2000;     // people whose shares are counted in the room
+const SHARE_GAP_MS = 3000;    // share messages from one person closer than this are dropped without an error
+const MAX_SHARES_EACH = 100;  // shares counted per person in one live
 const MAX_POEMS = 40;         // poem titles the host can offer in the Request list
 const POEM_CHARS = 60;
 
@@ -41,6 +44,7 @@ const fresh = () => ({
   love: {},                   // uid -> { name, taps, dirty }  Love taps this live, merged per person
   joined: {},                 // uid -> { n: name, a: first seen (ms), g: 1 for a guest, m: messages }  (older lives stored 1)
   poems: [],                  // titles of poems with more than 5 stanzas, for the Request list
+  shared: {},                 // uid -> { n: name, c: times shared, b: people who joined through their link }  (host console only)
   show: { on: false, poem: '', playing: '' },   // what viewers may see: poem title and what is playing
 });
 
@@ -58,6 +62,7 @@ export class LiveRoom {
     this.tokens = new Map();       // token -> { user, until }
     this.pulses = { love: 0, like: 0 };
     this.lastLove = new Map();     // uid -> last love message time
+    this.lastShare = new Map();    // uid -> last share message time
     this.viewed = new Set();       // uids whose view was already sent to the database in this room
     this.lovingNow = false;
     this.saveTimer = null;
@@ -160,7 +165,7 @@ export class LiveRoom {
     if (!this.isBlocked(att)) {
       this.send(ws, { t: 'poems', titles: this.st.poems });
       this.send(ws, this.showFor(att));
-      this.noteJoin(att);
+      this.noteJoin(att, m.ref);
     }
     this.scheduleCount();
     await this.armAlarm();
@@ -169,12 +174,45 @@ export class LiveRoom {
   }
 
   // A person's first arrival during the live is shown to the host once. Rejoining adds nothing here.
-  noteJoin(att) {
+  // When they came through someone's invite link (ref = the first 8 characters of that person's account id), the host
+  // line says who invited them and the inviter gets a thank-you. Only the host console ever sees a join.
+  noteJoin(att, ref) {
     if (att.owner || this.st.status !== 'live' || this.st.joined[att.uid]) return;
     if (Object.keys(this.st.joined).length >= MAX_JOINED) return;
     this.st.joined[att.uid] = { n: att.name, a: Date.now(), g: att.anon ? 1 : 0, m: 0 };
+    const inviter = this.inviterFor(ref, att.uid);
+    if (inviter) inviter.row.b = (inviter.row.b || 0) + 1;
     this.saveSoon();
-    this.toHost({ t: 'joined', name: att.name, uid8: att.uid.slice(0, 4) });
+    this.toHost({ t: 'joined', name: att.name, uid8: att.uid.slice(0, 4), ...(inviter ? { via: inviter.row.n, viaUid8: inviter.uid.slice(0, 4) } : {}) });
+    if (inviter) this.each((w, a) => { if (a.uid === inviter.uid && !a.owner) this.send(w, { t: 'thanks', name: att.name }); });
+  }
+
+  // The person a ref points to: someone who shared, or at least joined, this live. A bad, unknown, ambiguous or own ref gives null.
+  inviterFor(ref, uid) {
+    if (typeof ref !== 'string' || !/^[0-9a-f]{8}$/i.test(ref)) return null;
+    const key = ref.toLowerCase();
+    const hits = new Set();
+    for (const k of Object.keys(this.st.shared)) if (k !== uid && k.toLowerCase().startsWith(key)) hits.add(k);
+    for (const k of Object.keys(this.st.joined)) if (k !== uid && k.toLowerCase().startsWith(key)) hits.add(k);
+    if (hits.size !== 1) return null;
+    const id = [...hits][0];
+    let row = this.st.shared[id];
+    if (!row) {
+      if (Object.keys(this.st.shared).length >= MAX_SHARERS) return null;
+      const j = this.st.joined[id];
+      row = this.st.shared[id] = { n: clean((j && typeof j === 'object' && j.n) || 'Viewer', 30), c: 0, b: 0 };
+    }
+    return { uid: id, row };
+  }
+
+  shareTotal() { let n = 0; for (const k in this.st.shared) n += this.st.shared[k].c || 0; return n; }
+
+  shareAllow(uid) {
+    const now = Date.now();
+    if (now - (this.lastShare.get(uid) || 0) < SHARE_GAP_MS) return false;
+    this.lastShare.set(uid, now);
+    if (this.lastShare.size > 2000) this.lastShare.clear();
+    return true;
   }
 
   // Counts a chat message for the viewer log (the room keeps only the last KEEP_CHAT lines, so it cannot be counted from those).
@@ -275,7 +313,7 @@ export class LiveRoom {
     const s = this.st;
     const set = s.settings;
     const v = { t: 'state', status: s.status, title: s.title, mode: set.mode, startedAt: s.startedAt, endedAt: s.endedAt, now: Date.now(), settings: publicSettings(set) };
-    if (att.owner) { v.ownerSettings = set; v.muted = Object.keys(s.muted); v.peak = s.peak; v.broadcaster = { ...s.broadcaster }; }
+    if (att.owner) { v.ownerSettings = set; v.muted = Object.keys(s.muted); v.peak = s.peak; v.broadcaster = { ...s.broadcaster }; v.shares = this.shareTotal(); }
     if (this.isBlocked(att)) { v.you = { uid: att.uid, name: att.name, blocked: 'login' }; return v; }
     v.pinned = s.pinned;
     v.chatPaused = s.chatPaused;
@@ -447,6 +485,19 @@ export class LiveRoom {
       this.saveSoon();
       const out = { t: 'love', name: att.name, uid8: att.uid.slice(0, 4), n, total: row.taps, all: this.loveTotal() };
       this.each((w, a) => { if (!this.isBlocked(a)) this.send(w, out); });
+      return;
+    }
+
+    // A person shared the live (the share sheet finished or the link was copied). Only the host console hears about it.
+    if (m.t === 'share') {
+      if (att.owner || s.status !== 'live' || !this.shareAllow(att.uid)) return;
+      const known = s.shared[att.uid];
+      if (!known && Object.keys(s.shared).length >= MAX_SHARERS) return;
+      const row = known || (s.shared[att.uid] = { n: att.name, c: 0, b: 0 });
+      if (row.c >= MAX_SHARES_EACH) return;
+      row.n = att.name; row.c += 1;
+      this.saveSoon();
+      this.toHost({ t: 'shared', name: att.name, uid8: att.uid.slice(0, 4), total: row.c, all: this.shareTotal() });
       return;
     }
 

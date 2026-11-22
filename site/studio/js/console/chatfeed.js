@@ -2,7 +2,7 @@
 // requests (with a small label after the text), joined lines and Love bursts. Requests is the queue you work
 // through. Each tab's badge counts what arrived since that tab was last open. Pause chat and mute by ID are in
 // the settings modal; pin is not offered here. The live counts (stats) sit at the right end of the tab row.
-import { h, loveIcon } from '../ui.js';
+import { h, loveIcon, shareIcon } from '../ui.js';
 
 export function chatPane(engine, stats) {
   let tab = 'chats';
@@ -47,7 +47,8 @@ export function chatPane(engine, stats) {
   };
   const lineFor = (e) => {
     if (e.kind === 'chat') return chatLine(e.c);
-    if (e.kind === 'joined') return h('div', { class: 'cline sys' }, `${e.name} joined`);
+    if (e.kind === 'joined') return h('div', { class: 'cline sys' }, e.via ? `${e.name} joined via ${e.via}'s link` : `${e.name} joined`);
+    if (e.kind === 'shared') return h('div', { class: 'cline sys' }, shareIcon(14), ` ${e.name} shared the live${e.total > 1 ? ` ×${e.total}` : ''}`);
     if (e.kind === 'love') return h('div', { class: 'cline love' }, loveIcon(14), ` ${e.name} ×${e.total}`);
     return h('div', { class: 'cline' }, h('b', {}, e.name, h('span', { class: 'muted' }, e.uid8 ? ` ·${e.uid8}` : '')), ' ', h('span', {}, e.text), h('span', { class: 'rlabel' }, 'request'));
   };
