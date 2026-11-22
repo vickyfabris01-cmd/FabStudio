@@ -889,12 +889,24 @@ async function existingView(first, nav) {
   paintVersions();
   paintScene();
   paintActions();
-  put(root,
-    h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio'),
-      h('button', { class: 'btn small primary', type: 'button', onclick: openEdit }, 'Edit')),
-    titleBox, wrap, h('div', { class: 'row' }, thumbEdit, h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await downloadItem(id); } catch (e) { toast(e.message || String(e)); } } }, 'Download')), status, descBox,
-    published() ? statRow : null,
-    progressSlot, versionsBox, sceneBox, actions, commentsBox);
+  const toolbar = h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio'),
+    h('button', { class: 'btn small primary', type: 'button', onclick: openEdit }, 'Edit'));
+  const downloadBtn = h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await downloadItem(id); } catch (e) { toast(e.message || String(e)); } } }, 'Download');
+  if (window.matchMedia('(min-width: 900px)').matches) {
+    // Laptop: two columns. The item itself (picture, title, description, numbers, comments) on the left; what you do
+    // with it (publish and settings, versions, animated screen) on the right. Phones keep the single column below.
+    root.classList.add('item-wide');
+    put(root, toolbar,
+      h('div', { class: 'ip-grid' },
+        h('div', { class: 'ip-main' }, titleBox, wrap, h('div', { class: 'row' }, thumbEdit, downloadBtn), status, descBox, published() ? statRow : null, commentsBox),
+        h('div', { class: 'ip-side' }, progressSlot, actions, versionsBox, sceneBox)));
+  } else {
+    put(root,
+      toolbar,
+      titleBox, wrap, h('div', { class: 'row' }, thumbEdit, downloadBtn), status, descBox,
+      published() ? statRow : null,
+      progressSlot, versionsBox, sceneBox, actions, commentsBox);
+  }
 
   disposers.push(onPublishJobs((j) => {
     if (j.id !== id || !root.isConnected) return;

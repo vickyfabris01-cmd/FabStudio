@@ -569,3 +569,15 @@ body.le-open { overflow: hidden; }
 .bk-title { font-family: var(--serif); font-size: 1.1rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bk-note:empty { display: none; }
 .baking-console .c-head .btn.danger { border-color: var(--rec); color: var(--rec); }
+
+/* ---------- Item page on a laptop: two columns (phones keep the single column) ---------- */
+.item-wide .ip-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); gap: 1.6rem; align-items: start; }
+.item-wide .ip-main, .item-wide .ip-side { min-width: 0; }
+.item-wide .ip-side { display: grid; gap: 1rem; }
+.item-wide .ip-side > div:empty { display: none; }
+.item-wide .ip-side .panel, .item-wide .ip-main .panel { margin-top: 0; }
+.item-wide .ip-main .panel { margin-top: 1rem; }
+.item-wide .item-title { font-size: 1.8rem; }
+.item-wide .cover-wrap { max-width: calc(62vh * 16 / 9); }
+.item-wide .desc.clamp { white-space: pre-wrap; }
+.item-wide .edit-row .linkbtn { display: none; }
