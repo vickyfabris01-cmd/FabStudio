@@ -2,7 +2,7 @@
 // when someone opens it with no connection. It never stores poems, audio, video or API answers: everything else
 // goes straight to the network, so the live, reactions and comments behave exactly as before.
 // The Studio has its own service worker (/studio/sw.js) and is left alone here.
-const CACHE = 'fabris-public-v1';
+const CACHE = 'fabris-public-v2';
 const OFFLINE = '/offline.html';
 
 self.addEventListener('install', (e) => {
