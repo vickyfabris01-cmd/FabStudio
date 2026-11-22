@@ -17,6 +17,8 @@ class Playlist extends EventTarget {
     this.ctx = null;        // { folderId, files: [{ path, name, handle }], index }
     this.trackFn = null;    // called with the track that is now current (so the header shows its name)
     deck.onEnded(({ key }) => { if (this.loop && this.ctx && key === this.currentKey()) this.step(1, true); });
+    // Looping a long enough track: the next one starts over its last seconds (a crossfade). Short tracks loop at their end.
+    deck.onNearEnd(({ key }) => { if (this.loop && this.ctx && key === this.currentKey()) this.step(1, true); });
   }
   emit() { this.dispatchEvent(new Event('change')); }
   on(fn) { this.addEventListener('change', fn); return () => this.removeEventListener('change', fn); }

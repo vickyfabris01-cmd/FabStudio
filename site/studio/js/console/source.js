@@ -2,7 +2,8 @@
 // the app starts, so nothing is loaded until you choose it. The control in the console header has two parts:
 // a Poem | Music dropdown (the mode), and a name area that says "Click to choose…" and, once something is
 // picked, shows its name. The name area is itself a dropdown: it opens a list over the screen, with search.
-// Picking only LOADS: a poem shows its text, a music file is opened in the Deck paused. Play starts it.
+// Picking a poem only shows its text (nothing playing is touched). Picking a music file starts it, crossfading over
+// whatever is playing.
 import { db } from '../db.js';
 import { h, toast, fmtDur, probeDuration } from '../ui.js';
 import { deck } from './deck.js';
@@ -134,7 +135,7 @@ export function sourceControl() {
       const folder = st.folder;
       const key = fileKey(folder.id, f.path);
       const file = await f.handle.getFile();
-      await deck.load(file, { source: 'file', key, name: f.name });
+      await deck.play(file, { source: 'file', key, name: f.name });   // picking music starts it; over something playing it crossfades
       source.setMusic({ path: f.path, name: f.name, handle: f.handle, folderId: folder.id, key });
       playlist.set(folder.id, st.files, f.path);   // the loop now stays inside this folder
       close();
