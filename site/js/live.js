@@ -3,7 +3,7 @@
 import { h, fmtWhen, toast } from '../shared/dom.js';
 import { connectRoom } from '../shared/live-socket.js';
 import { pullAudio, watchQuality } from '../shared/sfu.js';
-import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady } from './auth-ui.js';
+import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, isMember } from './auth-ui.js';
 import * as data from './data.js';
 
 const svg = (d) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return s.firstChild; };
@@ -20,7 +20,7 @@ const SHARE = '<path d="M6 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M18 6
 const CHEV = '<path d="M6 9l6 6l6 -6"/>';
 const id = new URLSearchParams(location.search).get('id') || '';
 const root = document.getElementById('live');
-const token = async () => { const s = getSession() || await guestReady(); return s?.access_token || null; };
+const token = async () => (isMember() ? getSession().access_token : null);   // no guest accounts: no sign-in, no token
 const hms = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); const hh = Math.floor(s / 3600); return `${hh ? hh + ':' : ''}${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 
 const ERR = {
@@ -33,12 +33,15 @@ const ERR = {
 
 async function main() {
   mountAccountChip(document.getElementById('account'), { newTab: true });
-  await initAuth({ guest: true });
+  await initAuth();
   let row = null;
   try { row = id ? await data.getLive(id) : null; } catch (e) { root.replaceChildren(h('p', { class: 'empty' }, 'Could not load this live. ' + data.friendly(e))); return; }
   if (!row) { root.replaceChildren(h('p', { class: 'empty' }, 'This live is not available.'), h('p', {}, h('a', { href: '/' }, 'Back to all poems'))); return; }
   document.title = `${row.title} | Fabris Poet`;
-  guestReady().then((s) => { if (s) data.recordView(id, s.user.id); });
+  let counted = false;
+  const countView = () => { const s = getSession(); if (counted || !s || s.user.is_anonymous) return; counted = true; data.recordView(id, s.user.id); };
+  countView();
+  onAuth(countView);
 
   const S = {
     row, room: null, chat: [], listening: false, mine: new Set(), conn: 'connecting', q: null, pull: null, stopQ: null, epoch: -1, muted: false, meter: null, raf: 0,
@@ -179,7 +182,7 @@ async function main() {
       paint();
     },
   });
-  onAuth(() => { room.hello(); });
+  onAuth(() => { room.hello(); paint(); });
 
   async function refreshRow() { try { const r = await data.getLive(id); if (r) { S.row = r; paint(); } } catch { /* keep the last */ } }
   setInterval(refreshRow, 20000);
@@ -340,7 +343,7 @@ async function main() {
   function paint() {
     const st = status();
     const caps = S.room?.you || {};
-    const blocked = caps.blocked === 'login';
+    const blocked = caps.blocked === 'login' || !isMember();   // a live needs an account
     const settings = { ...(S.row.settings || {}), ...(S.room?.settings || {}) };
     const live = st === 'live';
     const ended = st === 'ended';
@@ -412,10 +415,10 @@ async function main() {
 
     // gates and notes
     gate.hidden = !blocked;
-    if (blocked) gate.replaceChildren(h('h2', {}, 'Sign in to join'), h('p', {}, 'This live is for signed-in accounts only.'), h('a', { class: 'l-btn', href: `/auth/?next=${encodeURIComponent(location.pathname + location.search)}` }, 'Sign in or create an account'));
-    note.hidden = S.conn === 'open';
+    if (blocked) gate.replaceChildren(h('h2', {}, 'Sign in to join'), h('p', {}, 'Lives are for signed-in accounts. Sign in with Google or email to listen, chat and react.'), h('button', { class: 'l-btn', type: 'button', onclick: () => requireAuth('join') }, 'Sign in or create an account'));
+    note.hidden = S.conn === 'open' || blocked;
     note.textContent = S.conn === 'open' ? '' : S.conn === 'reconnecting' ? 'Reconnecting to the live…' : 'Connecting to the live…';
-    before.hidden = live || ended || blocked;
+    before.hidden = live || ended;
 
     // one feed: chat, requests and love, in time order
     const reqs = (S.room?.requests || []).filter((r) => r.status !== 'dismissed').map((r) => ({ kind: 'request', id: r.id, name: r.name, text: r.text, at: r.at || 0, mine: r.mine, seq: 0 }));

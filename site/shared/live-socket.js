@@ -14,9 +14,12 @@ export function connectRoom({ item, getToken, console: asConsole = false, ref = 
   let retry = null;
   let beat = null;
 
+  let opening = false;
   const hello = async () => {
     const token = await getToken();
     if (token && ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'hello', token, console: asConsole, ...(ref ? { ref } : {}) }));
+    // Someone who was waiting to sign in has just signed in: connect now instead of at the next retry.
+    else if (token && !ws && !opening && !closed) { clearTimeout(retry); open(); }
   };
 
   const later = () => {
@@ -28,11 +31,13 @@ export function connectRoom({ item, getToken, console: asConsole = false, ref = 
   };
 
   async function open() {
-    if (closed) return;
+    if (closed || opening) return;
+    opening = true;
     onStatus(tries ? 'reconnecting' : 'connecting');
     const token = await getToken();
+    opening = false;
     if (closed) return;
-    if (!token) return later(); // no session yet (a guest account is still being made)
+    if (!token) return later(); // not signed in yet: keep checking, and hello() connects at once after sign-in
     try { ws = new WebSocket(roomUrl(item)); } catch { return later(); }
     const mine = ws;
     mine.onopen = () => {

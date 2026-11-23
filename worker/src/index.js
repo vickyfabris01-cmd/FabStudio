@@ -105,7 +105,7 @@ async function liveRoute(request, env, cors, url) {
     const mayListen = () => {
       if (info.status !== 'live') throw new HttpError(409, 'This live is not on right now');
       if (!info.broadcaster?.online) throw new HttpError(409, 'The audio is reconnecting');
-      if (info.mode === 'login' && user.is_anonymous && !isOwner) throw new HttpError(403, 'Sign in to listen to this live');
+      if (user.is_anonymous && !isOwner) throw new HttpError(403, 'Sign in to listen to this live');
     };
 
     if (path === '/live/sfu/session' && request.method === 'POST') {

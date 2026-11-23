@@ -1,5 +1,5 @@
 // The "Create account" block in the footer of the public pages: what an account gives, and a button.
-// It shows only to people who are not signed in (a guest counts as not signed in), and it stays hidden until
+// It shows only to people who are not signed in, and it stays hidden until
 // the page knows who is looking, so a member never sees it flash.
 // Below it, an "Install app" row appears when this browser can install the site.
 import { h } from '../shared/dom.js';
@@ -12,9 +12,9 @@ if (foot) {
   const box = h('div', { class: 'foot-invite', hidden: true },
     h('b', {}, 'Create a free account'),
     h('ul', {},
-      h('li', {}, 'React, comment and join the live chat'),
+      h('li', {}, 'Listen, watch, react, comment and join the live chat'),
       h('li', {}, 'Your reactions and comments follow you to any device'),
-      h('li', {}, 'Everything you did as a guest moves to your account')),
+      h('li', {}, 'Free, with Google or your email')),
     h('a', { class: 'btn-go', href: `/auth/signup/?next=${encodeURIComponent(back)}` }, 'Create account'),
     h('a', { class: 'foot-signin', href: `/auth/?next=${encodeURIComponent(back)}` }, 'Already have one? Sign in'));
   // Install: a real prompt where the browser has one, the "Add to Home Screen" steps on iPhone and iPad.

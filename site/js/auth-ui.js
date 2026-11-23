@@ -1,4 +1,5 @@
-// Viewer accounts for the public site: automatic guest sessions, email and password, Google, and guest-to-account merge.
+// Viewer accounts for the public site: email and password, Google, and the sign-in prompt shown before play, react or comment.
+// There are no automatic guest sessions any more. Old guest sessions still merge into an account when their owner signs in.
 import { CONFIG } from '../shared/config.js';
 import { sbp } from '../shared/supabase-public.js';
 import { h, toast } from '../shared/dom.js';
@@ -11,7 +12,6 @@ let googleLoading = null;
 let rawNonce = '';
 let googleDone = null;
 let merging = null;
-let guestPromise = null;
 let pwOpen = false;
 
 export const getSession = () => session;
@@ -30,8 +30,7 @@ export const displayName = () => {
 };
 
 /* ---------- start-up ---------- */
-// Pass { guest: true } on pages that show a poem: a visitor with no session silently gets a guest account.
-export async function initAuth({ guest = false } = {}) {
+export async function initAuth() {
   const { data } = await sbp.auth.getSession();
   session = data.session;
   sbp.auth.onAuthStateChange((event, s) => {
@@ -41,40 +40,52 @@ export async function initAuth({ guest = false } = {}) {
     if (event === 'PASSWORD_RECOVERY') setTimeout(() => passwordDialog('Choose a new password'), 0);
     if (event === 'SIGNED_IN') setTimeout(() => { mergeIfStashed(); }, 0);
   });
-  if (!session && guest) ensureGuest();
   mergeIfStashed();
   googleLoading = initGoogle();
   return session;
 }
 
-/* ---------- automatic guest ---------- */
-// Turnstile will plug in here later: return its token and it is sent with the sign-in.
-async function getCaptchaToken() { return undefined; }
+/* ---------- sign-in prompt ---------- */
+const ASK = {
+  listen: 'Sign in to listen', watch: 'Sign in to watch', react: 'Sign in to react', comment: 'Sign in to comment',
+  join: 'Sign in to join the live', default: 'Sign in to continue',
+};
+let prompting = null;
 
-export function ensureGuest() {
-  if (session) return Promise.resolve(session);
-  if (!guestPromise) {
-    guestPromise = (async () => {
-      const captchaToken = await getCaptchaToken();
-      const { data, error } = await sbp.auth.signInAnonymously(captchaToken ? { options: { captchaToken } } : undefined);
-      if (error) throw error;
-      session = data.session;
-      notify();
-      return session;
-    })().catch((e) => { console.warn('Could not start a guest session', e); return null; })
-      .finally(() => { guestPromise = null; });
-  }
-  return guestPromise;
-}
-
-// Resolves with the session once it exists (or null if a guest could not be created).
-export const guestReady = () => (session ? Promise.resolve(session) : (guestPromise || Promise.resolve(null)));
-
-// Used before a reaction or comment. Never shows a dialog: a guest account is made if needed.
-export async function requireAuth() {
-  const s = session || await ensureGuest();
-  if (!s) toast('Could not start your session. Check your connection and try again.');
-  return s;
+// Used before play, a reaction or a comment. A signed-in person passes straight through. Anyone else gets a small
+// prompt on the same page (Continue with Google, or email). Resolves with the session once they are signed in,
+// or null if they close the prompt. Google keeps them on the page, so what they were doing carries on.
+export function requireAuth(reason = 'default') {
+  if (isMember()) return Promise.resolve(session);
+  if (prompting) return prompting;
+  prompting = new Promise((resolve) => {
+    const back = location.pathname + location.search;
+    const gbox = h('div', { class: 'gbox' });
+    let off = () => {};
+    const close = (result) => {
+      off();
+      document.removeEventListener('keydown', onKey);
+      googleDone = null;
+      wrap.remove();
+      prompting = null;
+      resolve(result);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') close(null); };
+    const wrap = h('div', { class: 'invite', role: 'dialog', 'aria-modal': 'true', 'aria-label': ASK[reason] || ASK.default, onclick: (e) => { if (e.target === wrap) close(null); } },
+      h('div', { class: 'invite-box' },
+        h('button', { class: 'invite-x', type: 'button', 'aria-label': 'Close', onclick: () => close(null) }, '×'),
+        h('h2', {}, ASK[reason] || ASK.default),
+        h('p', {}, 'Create a free account, or sign in, to listen, watch, react and comment.'),
+        gbox,
+        h('div', { class: 'invite-go' },
+          h('a', { class: 'btn-go', href: `/auth/?next=${encodeURIComponent(back)}` }, 'Sign in with email'),
+          h('a', { class: 'btn-later', href: `/auth/signup/?next=${encodeURIComponent(back)}` }, 'Create account'))));
+    document.addEventListener('keydown', onKey);
+    document.body.append(wrap);
+    renderGoogleButton(gbox, () => {});
+    off = onAuth((s) => { if (s && !s.user.is_anonymous) setTimeout(() => close(s), 0); });
+  });
+  return prompting;
 }
 
 /* ---------- Google ---------- */

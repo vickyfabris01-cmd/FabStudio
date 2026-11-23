@@ -87,7 +87,7 @@ export class LiveRoom {
 
     if (url.pathname === '/info') {
       const s = this.st;
-      return Response.json({ status: s.status, mode: s.settings.mode, broadcaster: { ...s.broadcaster } });
+      return Response.json({ status: s.status, mode: 'login', broadcaster: { ...s.broadcaster } });
     }
     if (url.pathname === '/ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected a WebSocket', { status: 426 });
@@ -271,7 +271,8 @@ export class LiveRoom {
   }
 
   /* ---------- what each person is allowed and shown ---------- */
-  isBlocked(att) { return this.st.settings.mode === 'login' && att.anon && !att.owner; }
+  // Every live needs a real account: a leftover guest session is treated as signed out.
+  isBlocked(att) { return att.anon && !att.owner; }
 
   caps(att) {
     const s = this.st;
@@ -283,9 +284,7 @@ export class LiveRoom {
     else if (!live) chat = 'closed';
     else if (s.chatPaused) chat = 'paused';
     else if (s.muted[att.uid]) chat = 'muted';
-    else if (att.anon && !set.chatGuests) chat = 'login';
-    const guestOk = !(att.anon && !set.requestsGuests);
-    const base = !live && !att.owner ? 'closed' : !guestOk ? 'login' : 'ok';
+    const base = !live && !att.owner ? 'closed' : 'ok';
     return {
       chat,
       request: set.requestsEnabled ? base : 'off',
@@ -312,7 +311,7 @@ export class LiveRoom {
   view(att) {
     const s = this.st;
     const set = s.settings;
-    const v = { t: 'state', status: s.status, title: s.title, mode: set.mode, startedAt: s.startedAt, endedAt: s.endedAt, now: Date.now(), settings: publicSettings(set) };
+    const v = { t: 'state', status: s.status, title: s.title, mode: 'login', startedAt: s.startedAt, endedAt: s.endedAt, now: Date.now(), settings: publicSettings(set) };
     if (att.owner) { v.ownerSettings = set; v.muted = Object.keys(s.muted); v.peak = s.peak; v.broadcaster = { ...s.broadcaster }; v.shares = this.shareTotal(); }
     if (this.isBlocked(att)) { v.you = { uid: att.uid, name: att.name, blocked: 'login' }; return v; }
     v.pinned = s.pinned;

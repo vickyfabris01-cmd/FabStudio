@@ -1,7 +1,7 @@
 // One poem: sliding title, player, time and views, description, Like, comments.
 // (Love was removed from posts. Old Love data stays in the database, hidden; Love on a live is a different thing.)
 import { h, fmtDur, fmtAgo, fmtWhen, toast } from '../shared/dom.js';
-import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, guestReady, displayName } from './auth-ui.js';
+import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, isMember, displayName } from './auth-ui.js';
 import * as data from './data.js';
 import { maybeInvite } from './invite.js';
 import { downloadName, extOf } from '../shared/dl-name.js';
@@ -163,6 +163,8 @@ function audioStage({ src, thumb, duration, title = '', scene = null, bgUrl = ''
 
   btn.addEventListener('click', () => {
     if (!audio.paused) { audio.pause(); return; }
+    // Not signed in: ask first, then carry on playing once they are.
+    if (!isMember()) { requireAuth('listen').then((s) => { if (s) btn.click(); }); return; }
     setupAnalyser();
     if (ctx && ctx.state === 'suspended') ctx.resume();
     const p = audio.play();
@@ -178,7 +180,7 @@ function audioStage({ src, thumb, duration, title = '', scene = null, bgUrl = ''
 async function main() {
   mountAccountChip(document.getElementById('account'));
   const root = document.getElementById('poem');
-  await initAuth({ guest: true }); // a visitor with no session silently gets a guest account
+  await initAuth();
   const id = getId();
   let item = null;
   try { item = id ? await data.getItem(id) : null; } catch (e) { root.replaceChildren(h('p', { class: 'empty' }, 'Could not load this poem. ' + data.friendly(e))); return; }
@@ -186,8 +188,12 @@ async function main() {
   if (item.kind === 'live' && !item.public_media_key) { location.replace(`/live/?id=${id}`); return; }
   document.title = `${item.title} | Fabris Poet`;
 
-  // The view belongs to the guest (or real) account as soon as it exists.
-  guestReady().then((s) => { if (s) data.recordView(id, s.user.id); });
+  // A view belongs to a signed-in account. Visitors who are not signed in are not counted; the view is
+  // counted as soon as they sign in (on this page or after coming back from the sign-in page).
+  let counted = false;
+  const countView = () => { const s = getSession(); if (counted || !s || s.user.is_anonymous) return; counted = true; data.recordView(id, s.user.id); };
+  countView();
+  onAuth(countView);
 
   // After a poem has been played to its end, people without an account are invited to create one (once every 3 days).
   document.addEventListener('ended', (e) => { if (e.target instanceof HTMLMediaElement) setTimeout(maybeInvite, 900); }, true);
@@ -222,6 +228,15 @@ async function main() {
     let cur = null;
 
     const wire = (m) => {
+      // Playing needs an account. Someone who is not signed in is stopped here and asked to sign in; once they
+      // have, playback carries on (if the browser blocks that, one tap on play does).
+      m.addEventListener('play', () => {
+        if (isMember()) return;
+        m.pause();
+        requireAuth(cur?.mode === 'watch' ? 'watch' : 'listen').then((s) => {
+          if (s) m.play().catch(() => toast('You are signed in. Tap play to start.'));
+        });
+      });
       m.addEventListener('ended', () => { if (parts.length) goPart(nextPart()); });
       m.addEventListener('play', () => {
         if (!('mediaSession' in navigator)) return;
@@ -303,14 +318,14 @@ async function main() {
   async function loadMine() {
     const seq = ++mineSeq;
     const s = getSession();
-    const found = s ? await data.myReactions(id, s.user.id).catch(() => null) : null;
+    const found = s && !s.user.is_anonymous ? await data.myReactions(id, s.user.id).catch(() => null) : null;
     if (seq !== mineSeq) return;
     mine = new Set(found || []);
     paintPressed();
     refresh();
   }
   async function react(type) {
-    const s = await requireAuth();
+    const s = await requireAuth('react');
     if (!s) return;
     mineSeq++;
     try {
@@ -329,14 +344,20 @@ async function main() {
   const text = h('textarea', { class: 'chat-input', placeholder: 'Write a comment', rows: 1, maxlength: 500, 'aria-label': 'Comment' });
   const grow = () => { text.style.height = 'auto'; text.style.height = Math.min(text.scrollHeight, 120) + 'px'; };
   text.addEventListener('input', grow);
+  // Writing a comment needs an account: ask before they start typing, not after.
+  text.addEventListener('focus', () => {
+    if (isMember()) return;
+    text.blur();
+    requireAuth('comment').then((s) => { if (s) text.focus(); });
+  });
   const send = h('button', { class: 'send', type: 'button', 'aria-label': 'Send comment', onclick: async () => {
     const body = text.value.trim();
     if (!body) return toast('Write something first.');
-    const s = await requireAuth();
+    const s = await requireAuth('comment');
     if (!s) return;
     send.disabled = true;
     try {
-      // The name is the account name, or "Guest" and the first four characters of the guest id.
+      // The name is the account name.
       await data.postComment(id, s.user.id, displayName().slice(0, 30), body);
       text.value = '';
       grow();
