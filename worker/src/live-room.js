@@ -20,6 +20,8 @@ const REACT_MS = 1000;        // reaction pulses are batched into one message pe
 const MAX_REQUESTS = 200;
 const LOVE_BATCH = 12;        // taps accepted in one love message (the page batches about every 0.4 s)
 const LOVE_GAP_MS = 250;      // love messages from one person closer than this are dropped without an error
+const KEEP_LOVE = 100;        // Love lines kept in the room, so people who join or refresh see them in time order with the chat
+const LOVE_MERGE_MS = 2500;   // taps from one person closer than this share one line (the page used to merge them itself)
 const MAX_LOVERS = 5000;      // people whose love totals are kept in the room
 const MAX_JOINED = 5000;      // people remembered for "joined" notices
 const MAX_SHARERS = 2000;     // people whose shares are counted in the room
@@ -42,6 +44,7 @@ const fresh = () => ({
   peak: 0,
   requests: [],               // { id, uid, name, kind, text, status, at }. kind is always 'request'.
   love: {},                   // uid -> { name, taps, dirty }  Love taps this live, merged per person
+  loveFeed: [],               // { u: first 4 of the account id, name, total, at }  the Love lines shown in the feed, oldest first
   joined: {},                 // uid -> { n: name, a: first seen (ms), g: 1 for a guest, m: messages }  (older lives stored 1)
   poems: [],                  // titles of poems with more than 5 stanzas, for the Request list
   shared: {},                 // uid -> { n: name, c: times shared, b: people who joined through their link }  (host console only)
@@ -329,7 +332,11 @@ export class LiveRoom {
     if (this.isBlocked(att)) return;
     const n = att.owner ? KEEP_CHAT : this.st.settings.chatHistory;
     const list = n > 0 ? this.chat.filter((c) => !c.del).slice(-n) : [];
-    this.send(ws, { t: 'history', chat: list.map((c) => this.pub(c)) });
+    // Love lines come with the chat, so a refresh or a late join shows them in the same time order. When the chat window
+    // is full, Love older than its oldest message is left out, the same way old chat is.
+    const from = n > 0 && list.length >= n ? (list[0].at || 0) : 0;
+    const love = n > 0 ? (this.st.loveFeed || []).filter((l) => l.at >= from).slice(-KEEP_LOVE).map((l) => ({ uid8: l.u, name: l.name, total: l.total, at: l.at })) : [];
+    this.send(ws, { t: 'history', chat: list.map((c) => this.pub(c)), love });
   }
 
   pub(c) { return { id: c.id, name: c.name, text: c.text, at: c.at, host: !!c.host, uid8: c.uid.slice(0, 4) }; }
@@ -481,6 +488,9 @@ export class LiveRoom {
       if (!known && Object.keys(s.love).length >= MAX_LOVERS) return;
       const row = known || (s.love[att.uid] = { name: att.name, taps: 0, dirty: false });
       row.name = att.name; row.taps += n; row.dirty = true;
+      const now = Date.now(), u = att.uid.slice(0, 4), feed = s.loveFeed || (s.loveFeed = []), last = feed[feed.length - 1];
+      if (last && last.u === u && now - last.at < LOVE_MERGE_MS) { last.total = row.taps; last.at = now; last.name = att.name; }
+      else { feed.push({ u, name: att.name, total: row.taps, at: now }); if (feed.length > KEEP_LOVE) feed.splice(0, feed.length - KEEP_LOVE); }
       this.saveSoon();
       const out = { t: 'love', name: att.name, uid8: att.uid.slice(0, 4), n, total: row.taps, all: this.loveTotal() };
       this.each((w, a) => { if (!this.isBlocked(a)) this.send(w, out); });

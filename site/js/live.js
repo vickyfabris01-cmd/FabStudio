@@ -169,7 +169,10 @@ async function main() {
         if (typeof m.loveTotal === 'number') S.loveTotal = Math.max(S.loveTotal || 0, m.loveTotal);
         onAudioEpoch();
       }
-      else if (m.t === 'history') S.chat = (m.chat || []).map((c) => ({ ...c, kind: 'chat' }));
+      else if (m.t === 'history') {
+        S.chat = (m.chat || []).map((c) => ({ ...c, kind: 'chat' }));
+        S.loves = (m.love || []).map((l) => ({ kind: 'love', uid8: l.uid8, name: l.name, total: l.total, at: l.at, seq: ++S.seq }));
+      }
       else if (m.t === 'chat') S.chat = [...S.chat, { ...m.msg, kind: 'chat' }].slice(-200);
       else if (m.t === 'chatDel') S.chat = S.chat.filter((c) => c.id !== m.id);
       else if (m.t === 'count') { if (S.room) S.room.watching = m.watching; }
