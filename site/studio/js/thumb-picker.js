@@ -19,7 +19,7 @@ const chooseImage = () => new Promise((resolve) => {
 export function pickThumbnail({ title = 'Untitled', video = null, current = null, look = 0, imageOnly = false, heading = 'Thumbnail', guides = false } = {}) {
   return new Promise((resolve) => {
     let mode = 'title';
-    let result = null;               // what "Use" would return
+    const results = { title: null, image: null, video: null };   // what "Use" returns, per way of making the thumbnail
     let look_ = look;
     let bmp = null; let zoom = 1; let ox = 0; let oy = 0;
     let busy = 0;
@@ -27,6 +27,7 @@ export function pickThumbnail({ title = 'Untitled', video = null, current = null
     const img = h('img', { class: 'tp-preview', alt: 'Thumbnail preview' });
     const canvas = h('canvas', { class: 'tp-preview', width: 640, height: 360, hidden: true, 'aria-label': 'Drag to move the picture, pinch to zoom' });
     // Dashed boxes for the hero: the card shows the picture cropped to its own shape (about 3.6:1 on a laptop, 1.2:1 on a phone).
+    const empty = h('div', { class: 'tp-empty', hidden: true }, 'Choose an image and it shows here. Then drag it to place it.');
     const guideBox = h('div', { class: 'tp-guides', hidden: true, 'aria-hidden': 'true' },
       h('div', { class: 'tp-g tp-g-laptop' }, h('span', {}, 'Laptop')),
       h('div', { class: 'tp-g tp-g-phone' }, h('span', {}, 'Phone')));
@@ -34,7 +35,7 @@ export function pickThumbnail({ title = 'Untitled', video = null, current = null
     if (current) show(current);
 
     const useBtn = h('button', { class: 'btn primary', type: 'button', disabled: true }, 'Use this thumbnail');
-    const setResult = (r) => { result = r; show(r.blob); useBtn.disabled = false; };
+    const setResult = (r) => { results[r.kind] = r; if (r.kind === mode) { show(r.blob); useBtn.disabled = false; } };
     const work = async (fn) => {
       const my = ++busy;
       try { await fn(my); } catch (e) { toast(e.message || String(e)); }
@@ -58,7 +59,7 @@ export function pickThumbnail({ title = 'Untitled', video = null, current = null
       ctx.fillStyle = '#14121a'; ctx.fillRect(0, 0, CW, CH);
       drawCover(ctx, bmp, bmp.width, bmp.height, CW, CH, zoom, ox, oy);
     };
-    const commitImg = () => work(async (my) => { const blob = await thumbFromBitmap(bmp, { zoom, ox, oy }); if (my === busy) { result = { blob, kind: 'image', look: look_ }; useBtn.disabled = false; } });
+    const commitImg = () => work(async (my) => { const blob = await thumbFromBitmap(bmp, { zoom, ox, oy }); if (my === busy) { results.image = { blob, kind: 'image', look: look_ }; if (mode === 'image') useBtn.disabled = false; } });
     // The picture sits at an offset (in canvas pixels, from the centre); ox and oy are that offset as a share of the spare room.
     const geom = (z) => {
       const base = Math.max(CW / bmp.width, CH / bmp.height) * Math.max(1, z);
@@ -143,7 +144,7 @@ export function pickThumbnail({ title = 'Untitled', video = null, current = null
       const f = await chooseImage(); if (!f) return;
       try { bmp = await createImageBitmap(f); } catch { return toast('That file is not a picture this browser can read.'); }
       zoom = 1; ox = 0; oy = 0;
-      img.hidden = true; canvas.hidden = false; guideBox.hidden = !guides;
+      img.hidden = true; empty.hidden = true; canvas.hidden = false; guideBox.hidden = !guides;
       drawImg(); commitImg();
     };
     const imagePane = h('div', { class: 'tp-pane' }, pick, hint, zoomOut, zoomIn);
@@ -171,18 +172,22 @@ export function pickThumbnail({ title = 'Untitled', video = null, current = null
       tabBtns.forEach((b, i) => b.classList.toggle('on', tabs[i][0] === k));
       panes.replaceChildren(tabs.find((t) => t[0] === k)[2]);
       const showCanvas = k === 'image' && !!bmp;
-      canvas.hidden = !showCanvas; img.hidden = showCanvas; guideBox.hidden = !(guides && showCanvas);
-      if (k === 'title' && !result && !current) makeTitle();
+      const showEmpty = k === 'image' && !bmp;
+      canvas.hidden = !showCanvas; img.hidden = showCanvas || showEmpty; empty.hidden = !showEmpty; guideBox.hidden = !(guides && showCanvas);
+      useBtn.disabled = !results[k];
+      if (k === 'title') { if (results.title) show(results.title.blob); else if (current) show(current); else makeTitle(); }
+      if (k === 'video') { const r = results.video; if (r) show(r.blob); else if (current) show(current); }
+      if (k === 'image' && bmp) drawImg();
     }
 
     const cancel = h('button', { class: 'btn', type: 'button' }, 'Cancel');
-    const m = openModal(h('h3', {}, heading), h('div', { class: 'tp-frame' }, img, canvas, guideBox), h('div', { class: 'row c-tabs' }, tabBtns), panes, guideNote,
+    const m = openModal(h('h3', {}, heading), h('div', { class: 'tp-frame' }, img, canvas, empty, guideBox), h('div', { class: 'row c-tabs' }, tabBtns), panes, guideNote,
       h('div', { class: 'row tp-foot' }, h('span', { class: 'grow' }), cancel, useBtn));
     let done = false;
     const finish = (r) => { if (done) return; done = true; m.close(); resolve(r); };
     m.box.addEventListener('modal-close', () => { if (!done) { done = true; resolve(null); } });
     cancel.onclick = () => finish(null);
-    useBtn.onclick = () => finish(result);
+    useBtn.onclick = () => finish(results[mode]);
     setMode(imageOnly ? 'image' : 'title');
     if (current) { /* the current picture shows until something is changed */ }
   });

@@ -609,3 +609,33 @@ body.le-open { overflow: hidden; }
 .src-main.slide > span { animation: src-slide var(--t, 8s) linear infinite alternate; }
 @keyframes src-slide { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(calc(-1 * var(--d, 0px))); } }
 @media (prefers-reduced-motion: reduce) { .src-main.slide > span { animation: none; } .src-main > span { display: inline; } .src-main.slide { -webkit-mask-image: none; mask-image: none; text-overflow: ellipsis; } }
+
+/* ---------- Item page: audio and video screens side by side, Screen settings card ---------- */
+.item-wide .ip-grid { grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
+.screens { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: .4rem 0; }
+.item-wide .screens { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.screen { min-width: 0; display: grid; gap: .4rem; align-content: start; }
+.screen-head { display: flex; align-items: center; gap: .5rem; min-height: 40px; }
+.screen-head .sub { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen .cover-wrap, .item-wide .screens .cover-wrap { margin: 0; max-width: none; }
+.screens .cover-play { width: 48px; height: 48px; }
+.cover-wrap.off .cover { filter: grayscale(1) brightness(.45); }
+.cover-off { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; padding: .8rem; text-align: center; color: var(--text); }
+.cover-off p { margin: 0; color: var(--muted); max-width: 30ch; }
+.screen.off .screen-btns .btn { opacity: .4; }
+.screen-btns { flex-wrap: wrap; gap: .5rem; }
+.vm-status { min-width: 0; }
+.vm-status progress { margin: .2rem 0; }
+.sc-row select { flex: 1; min-width: 0; width: auto; }
+.panel select, .panel .row input[type='range'] { max-width: 100%; min-width: 0; }
+.flash > .panel { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow .3s; }
+.danger-zone { display: flex; justify-content: flex-end; }
+.danger-zone:empty { display: none; }
+
+/* ---------- Thumbnail picker: the hidden attribute must win, so a picked image shows in the frame ---------- */
+.tp-preview[hidden], .tp-empty[hidden] { display: none; }
+.tp-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 1rem; color: var(--muted); font-size: .9rem; pointer-events: none; }
+.screen-head { height: 40px; }
+.screen-head .iconbtn { width: 36px; height: 36px; }
+.cover-off { background: rgba(10, 9, 14, .62); }
+.panel .row > input[type='range'] { flex: 1; width: auto; }

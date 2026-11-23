@@ -11,7 +11,7 @@ import { pickThumbnail } from './thumb-picker.js';
 import { createSelection, selectBar, tickBox } from './select.js';
 import { downloadName, extOf } from '../../shared/dl-name.js';
 import { extractAudio } from './mp4-audio.js';
-import { scenePanel } from './scene-panel.js';
+import { scenePanel, videoMaker } from './scene-panel.js';
 import { toM4a } from './audio-encode.js';
 import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
 
@@ -204,17 +204,19 @@ const needNet = () => { if (!navigator.onLine) throw new Error('This needs inter
 
 // Saves an item's audio or video to this device as "Fabris Poet - <Title>.<ext>". The file comes from this
 // device when it is here, otherwise it is fetched first (that needs internet).
-async function downloadItem(id) {
+async function downloadItem(id, alt = false) {
   const row = await db.items.get(id);
   if (!row) return false;
-  let blob = row.blob;
+  const key = alt ? row.altKey : row.mediaKey;
+  if (!key) return false;
+  let blob = alt ? row.altBlob : row.blob;
   if (!blob) {
     needNet();
     toast('Getting the file…');
-    blob = await fetchMedia(row.mediaKey);
-    await db.items.update(id, { blob });
+    blob = await fetchMedia(key);
+    await db.items.update(id, alt ? { altBlob: blob } : { blob });
   }
-  const name = downloadName(row.title, extOf({ key: row.mediaKey, mime: row.mime }));
+  const name = downloadName(row.title, extOf({ key, mime: alt ? row.altMime : row.mime }));
   const url = URL.createObjectURL(blob);
   const a = h('a', { href: url, download: name });
   document.body.append(a);
@@ -552,6 +554,73 @@ export async function itemView(id, nav, prefill = {}) {
   return root;
 }
 
+/* ---------- one screen of the item page ---------- */
+// The thumbnail with play. An audio screen has a seek bar; a video plays in place.
+// playable false = the greyed-out screen of a version that is not made yet; overlay says what to do.
+function screenPlayer({ kind, getBlob, duration, playable, overlay = [], onPlay }) {
+  const wrap = h('div', { class: 'cover-wrap' + (playable ? '' : ' off') });
+  const img = h('img', { class: 'cover', alt: kind === 'video' ? 'Video screen' : 'Audio screen' });
+  const ph = h('div', { class: 'cover ph' });
+  let video = null; let audio = null; let mediaUrl = null; let seeking = false;
+  const setThumb = (url) => {
+    if (video) { if (url) video.poster = url; return; }
+    if (url) { img.src = url; if (!img.isConnected) wrap.prepend(img); ph.remove(); } else { img.remove(); if (!ph.isConnected) wrap.prepend(ph); }
+  };
+  const pause = () => { audio?.pause(); video?.pause(); };
+  const dispose = () => { pause(); if (mediaUrl) URL.revokeObjectURL(mediaUrl); };
+  if (!playable) {
+    wrap.append(h('div', { class: 'cover-off' }, overlay));
+    return { el: wrap, setThumb, pause, dispose };
+  }
+  const playBtn = h('button', { class: 'cover-play', type: 'button', 'aria-label': 'Play' }, playIcon(26));
+  wrap.append(playBtn);
+  const cur = h('span', {}, '0:00');
+  const tot = h('span', {}, fmtDur(duration));
+  const seek = h('input', { type: 'range', min: 0, max: 1000, value: 0, step: 1, 'aria-label': 'Seek' });
+  if (kind !== 'video') wrap.append(h('div', { class: 'cover-bar' }, cur, seek, tot));
+  const lenOf = () => (audio && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration || 0);
+  seek.oninput = () => { seeking = true; cur.textContent = fmtDur((seek.value / 1000) * lenOf()); };
+  seek.onchange = () => { if (audio) audio.currentTime = (seek.value / 1000) * lenOf(); seeking = false; };
+  playBtn.onclick = async () => {
+    if (kind === 'video') {
+      if (mediaUrl) return;
+      playBtn.disabled = true;
+      const blob = await getBlob();
+      playBtn.disabled = false;
+      if (!blob) return toast('Not on this device yet. Connect to the internet to download it.');
+      mediaUrl = URL.createObjectURL(blob);
+      const v = h('video', { class: 'cover', controls: true, playsinline: true });
+      const poster = img.src;
+      if (poster) v.poster = poster;
+      v.src = mediaUrl;
+      v.onplay = () => onPlay?.();
+      video = v;
+      wrap.replaceChildren(v);
+      v.play().catch(() => {});
+      return;
+    }
+    if (audio) { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); return; }
+    playBtn.disabled = true;
+    const blob = await getBlob();
+    playBtn.disabled = false;
+    if (!blob) return toast('Not on this device yet. Connect to the internet to download it.');
+    mediaUrl = URL.createObjectURL(blob);
+    audio = new Audio(mediaUrl);
+    audio.onplay = () => { playBtn.replaceChildren(pauseIcon(26)); onPlay?.(); };
+    audio.onpause = () => playBtn.replaceChildren(playIcon(26));
+    audio.onended = () => { playBtn.replaceChildren(playIcon(26)); seek.value = 0; cur.textContent = '0:00'; };
+    audio.ontimeupdate = () => {
+      if (seeking) return;
+      const len = lenOf();
+      cur.textContent = fmtDur(audio.currentTime);
+      if (len) seek.value = Math.min(1000, Math.round((audio.currentTime / len) * 1000));
+    };
+    audio.onerror = () => toast('This audio could not be played.');
+    audio.play().catch(() => {});
+  };
+  return { el: wrap, setThumb, pause, dispose };
+}
+
 /* ---------- saved item: the page for one item ---------- */
 // Reads like the public poem page: title, picture with play, when it went out, description, the numbers
 // (read only), share. Only the title and description are edited here, each with its pen.
@@ -620,7 +689,7 @@ async function existingView(first, nav) {
     ta.value = item.description || '';
     const save = h('button', { class: 'btn primary', type: 'button' }, 'Save');
     const cancel = h('button', { class: 'btn', type: 'button' }, 'Cancel');
-    const thumbBtn = h('button', { class: 'btn', type: 'button', onclick: () => thumbEdit.onclick() }, 'Change thumbnail');
+    const thumbBtn = h('button', { class: 'btn', type: 'button', onclick: () => editThumb() }, 'Change thumbnail');
     const m = openModal(h('h3', {}, 'Edit'),
       h('label', {}, h('span', { class: 'muted small' }, 'Title'), ti),
       h('label', {}, h('span', { class: 'muted small' }, 'Description'), ta),
@@ -646,29 +715,19 @@ async function existingView(first, nav) {
     ti.focus();
   }
 
-  /* picture, with play (audio gets a seek bar, video plays in place) */
-  const img = h('img', { class: 'cover', alt: 'Thumbnail' });
-  const noThumb = h('div', { class: 'cover ph' });
-  const wrap = h('div', { class: 'cover-wrap' });
+  /* the thumbnail, shared by both screens */
+  const players = [];   // every screen on the page shows the thumbnail
   let thumbUrl = null;
   function setThumb() {
-    if (wrap.querySelector('video')) return;
-    if (thumbUrl) URL.revokeObjectURL(thumbUrl);
-    thumbUrl = null;
-    if (item.thumbBlob) {
-      thumbUrl = URL.createObjectURL(item.thumbBlob);
-      img.src = thumbUrl;
-      if (!img.isConnected) wrap.prepend(img);
-      noThumb.remove();
-    } else if (!noThumb.isConnected && !img.isConnected) wrap.prepend(noThumb);
+    const old = thumbUrl;
+    thumbUrl = item.thumbBlob ? URL.createObjectURL(item.thumbBlob) : null;
+    players.forEach((p) => p.setThumb(thumbUrl));
+    if (old) URL.revokeObjectURL(old);
   }
-  setThumb();
   if (!item.thumbBlob && navigator.onLine) {
     fetchMedia(item.thumbKey).then(async (b) => { await db.items.update(id, { thumbBlob: b }); item = await db.items.get(id); setThumb(); }).catch(() => {});
   }
-
-  const thumbEdit = h('button', { class: 'btn small', type: 'button' }, 'Edit thumbnail');
-  thumbEdit.onclick = async () => {
+  async function editThumb() {
     const row = await db.items.get(id);
     const r = await pickThumbnail({ title: item.title || 'Untitled', video: item.kind === 'video' ? row?.blob || null : null, current: item.thumbBlob || null, look: item.thumbVariant || 0 });
     if (!r) return;
@@ -679,61 +738,19 @@ async function existingView(first, nav) {
     paintStatus();
     paintActions();
     toast(published() ? 'Saved. Update and republish to show it on the public page.' : 'Thumbnail saved.');
-  };
-
-  const getBlob = async () => {
+  }
+  const getPrimaryBlob = async () => {
     const row = await db.items.get(id);
     if (row?.blob) return row.blob;
     try { const b = await fetchMedia(row.mediaKey); await db.items.update(id, { blob: b }); return b; } catch { return null; }
   };
-  const playBtn = h('button', { class: 'cover-play', type: 'button', 'aria-label': 'Play' }, playIcon(26));
-  wrap.append(playBtn);
-  let audio = null;
-  let mediaUrl = null;
-  let seeking = false;
-  const cur = h('span', {}, '0:00');
-  const tot = h('span', {}, fmtDur(item.duration));
-  const seek = h('input', { type: 'range', min: 0, max: 1000, value: 0, step: 1, 'aria-label': 'Seek' });
-  if (item.kind !== 'video') wrap.append(h('div', { class: 'cover-bar' }, cur, seek, tot));
-  const lenOf = () => (audio && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : item.duration || 0);
-  seek.oninput = () => { seeking = true; cur.textContent = fmtDur((seek.value / 1000) * lenOf()); };
-  seek.onchange = () => { if (audio) audio.currentTime = (seek.value / 1000) * lenOf(); seeking = false; };
-
-  playBtn.onclick = async () => {
-    if (item.kind === 'video') {
-      if (mediaUrl) return;
-      playBtn.disabled = true;
-      const blob = await getBlob();
-      playBtn.disabled = false;
-      if (!blob) return toast('Not on this device yet. Connect to the internet to download it.');
-      mediaUrl = URL.createObjectURL(blob);
-      const v = h('video', { class: 'cover', controls: true, playsinline: true });
-      if (thumbUrl) v.poster = thumbUrl;
-      v.src = mediaUrl;
-      wrap.replaceChildren(v);
-      v.play().catch(() => {});
-      return;
-    }
-    if (audio) { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); return; }
-    playBtn.disabled = true;
-    const blob = await getBlob();
-    playBtn.disabled = false;
-    if (!blob) return toast('Not on this device yet. Connect to the internet to download it.');
-    mediaUrl = URL.createObjectURL(blob);
-    audio = new Audio(mediaUrl);
-    audio.onplay = () => playBtn.replaceChildren(pauseIcon(26));
-    audio.onpause = () => playBtn.replaceChildren(playIcon(26));
-    audio.onended = () => { playBtn.replaceChildren(playIcon(26)); seek.value = 0; cur.textContent = '0:00'; };
-    audio.ontimeupdate = () => {
-      if (seeking) return;
-      const len = lenOf();
-      cur.textContent = fmtDur(audio.currentTime);
-      if (len) seek.value = Math.min(1000, Math.round((audio.currentTime / len) * 1000));
-    };
-    audio.onerror = () => toast('This audio could not be played.');
-    audio.play().catch(() => {});
+  const getAltBlob = async () => {
+    const row = await db.items.get(id);
+    if (row?.altBlob) return row.altBlob;
+    if (!row?.altKey) return null;
+    try { const b = await fetchMedia(row.altKey); await db.items.update(id, { altBlob: b }); return b; } catch { return null; }
   };
-  disposers.push(() => { audio?.pause(); if (mediaUrl) URL.revokeObjectURL(mediaUrl); if (thumbUrl) URL.revokeObjectURL(thumbUrl); });
+  disposers.push(() => { players.forEach((p) => p.dispose()); if (thumbUrl) URL.revokeObjectURL(thumbUrl); });
 
   /* when it went out */
   const status = h('div', { class: 'sub' });
@@ -805,52 +822,96 @@ async function existingView(first, nav) {
       !busy && job?.state === 'error' ? h('p', { class: 'error' }, 'Publishing failed: ' + job.error) : null);
   }
 
-  /* the second version: an audio item's video, a video item's audio */
-  const versionsBox = h('div', { class: 'panel' });
+  /* the two screens: audio on the left, video on the right, the same size. A version not made yet is greyed out. */
   const isAudioItem = () => item.kind === 'audio';
+  const screensBox = h('div', { class: 'screens' });
+  const sceneBox = h('div', {});   // Screen settings card (audio items only)
+  const sig = () => JSON.stringify([item.altKey, item.altDuration, item.altPending, !!item.scene, item.duration]);
+  let shown = '';
   async function altChanged() {
     item = await db.items.get(id);
-    paintVersions();
+    if (sig() !== shown) paintScreens();   // the screens are only redrawn when a version changed, so playing is not interrupted
     paintScene();
     paintActions();
   }
-  // The animated screen, lyrics and "Make video version" (audio items only).
-  const sceneBox = h('div', {});
   function paintScene() {
     if (item.kind !== 'audio') { sceneBox.replaceChildren(); return; }
     put(sceneBox, scenePanel({ id, item, db, now, syncSoon, fetchMedia, putAlt, changed: altChanged }));
   }
-  const run = (btn, fn) => async () => {
-    btn.disabled = true;
+  const runVersion = async (fn, btn) => {
+    if (btn) btn.disabled = true;
     try { const problem = await fn(); if (problem) toast(problem); else await altChanged(); } catch (e) { toast(e.message || String(e)); }
-    finally { btn.disabled = false; }
+    finally { if (btn) btn.disabled = false; }
   };
-  function paintVersions() {
-    if (item.kind === 'live') { versionsBox.hidden = true; return; }
-    const what = isAudioItem() ? 'Video' : 'Audio';
-    const has = !!item.altKey;
-    const upload = h('button', { class: 'btn small', type: 'button' }, has ? `Replace ${what.toLowerCase()} version` : `Upload ${what.toLowerCase()} version`);
-    upload.onclick = run(upload, async () => {
-      const file = await pickFile(isAudioItem() ? 'video/mp4' : 'audio/*');
-      if (!file) return '';
-      const problem = await setAltFile(id, file);
-      if (!problem && isAudioItem() && item.duration && Math.abs((await probeDuration(file)) - item.duration) > 3) toast('This video is not the same length as the audio. It was added anyway.');
-      return problem;
-    });
-    const extract = !isAudioItem() ? h('button', { class: 'btn small', type: 'button' }, 'Take the audio from the video') : null;
-    if (extract) extract.onclick = run(extract, () => makeAudioVersion(id));
-    const remove = has ? h('button', { class: 'btn small danger', type: 'button' }, `Remove ${what.toLowerCase()} version`) : null;
-    if (remove) remove.onclick = run(remove, async () => { if (!confirm(`Remove the ${what.toLowerCase()} version?`)) return ''; await removeAlt(id); return ''; });
-    put(versionsBox,
-      h('h3', {}, `${what} version`),
-      h('p', { class: has ? '' : 'muted' }, has ? `${what} version ready${item.altDuration ? ', ' + fmtDur(item.altDuration) : ''}${item.altPending ? ' (uploading)' : ''}.` : `No ${what.toLowerCase()} version yet. People can still download this item; the ${what.toLowerCase()} option shows greyed out.`),
-      h('div', { class: 'stack' }, upload, extract, remove, ...(versionButtons ? versionButtons(item, altChanged) : [])));
+  const uploadVersion = async () => {
+    const file = await pickFile(isAudioItem() ? 'video/mp4' : 'audio/*');
+    if (!file) return '';
+    const problem = await setAltFile(id, file);
+    if (!problem && isAudioItem() && item.duration && Math.abs((await probeDuration(file)) - item.duration) > 3) toast('This video is not the same length as the audio. It was added anyway.');
+    return problem;
+  };
+  const goToSettings = () => {
+    sceneBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    sceneBox.classList.add('flash');
+    setTimeout(() => sceneBox.classList.remove('flash'), 1400);
+  };
+  function paintScreens() {
+    players.splice(0).forEach((p) => p.dispose());
+    shown = sig();
+    const maker = isAudioItem() ? videoMaker({ id, item, db, now, syncSoon, fetchMedia, putAlt, changed: altChanged }) : null;
+    const screen = (which) => {
+      const mine = item.kind === which;
+      const exists = mine || !!item.altKey;
+      const label = which === 'audio' ? 'Audio' : 'Video';
+      const dur = mine ? item.duration : item.altDuration;
+      const size = mine ? item.blob?.size : item.altBlob?.size;
+      const meta = exists ? [dur ? fmtDur(dur) : '', size ? fmtSize(size) : ''].filter(Boolean).join(' · ') : 'Not made yet';
+
+      // what shows on the greyed-out screen
+      let overlay = [];
+      if (!exists && which === 'video') {
+        overlay = [maker?.action, h('p', { class: 'small' }, maker?.note || ''), h('button', { class: 'linkbtn', type: 'button', onclick: () => runVersion(uploadVersion) }, 'or upload an MP4 file')];
+      } else if (!exists) {
+        const take = h('button', { class: 'btn small primary', type: 'button' }, 'Take the audio from the video');
+        take.onclick = () => runVersion(() => makeAudioVersion(id), take);
+        overlay = [take, h('button', { class: 'linkbtn', type: 'button', onclick: () => runVersion(uploadVersion) }, 'or upload an audio file')];
+      }
+      const p = screenPlayer({
+        kind: which, getBlob: mine ? getPrimaryBlob : getAltBlob, duration: dur, playable: exists, overlay,
+        onPlay: () => players.forEach((x) => { if (x !== p) x.pause(); }),
+      });
+      players.push(p);
+
+      // the corner: the pen opens Screen settings; the dots hold Replace and Remove
+      const corner = [];
+      if (which === 'audio' && isAudioItem()) corner.push(h('button', { class: 'iconbtn accent', type: 'button', 'aria-label': 'Screen settings', onclick: goToSettings }, pencilIcon(18)));
+      if (!mine && exists) {
+        const dots = h('button', { class: 'iconbtn', type: 'button', 'aria-label': `${label} version options` }, dotsIcon(20));
+        const items = [];
+        if (maker?.ready) items.push({ label: 'Make the video again', onclick: () => maker.start() });
+        items.push({ label: which === 'video' ? 'Replace with an MP4 file' : 'Replace with an audio file', onclick: () => runVersion(uploadVersion) });
+        items.push({ label: `Remove ${label.toLowerCase()} version`, danger: true, onclick: () => runVersion(async () => { if (!confirm(`Remove the ${label.toLowerCase()} version?`)) return ''; await removeAlt(id); return ''; }) });
+        dots.onclick = () => popMenu(dots, items);
+        corner.push(h('div', { class: 'menuwrap' }, dots));
+      }
+
+      const dl = h('button', { class: 'btn small', type: 'button', disabled: !exists, onclick: async () => { try { await downloadItem(id, !mine); } catch (e) { toast(e.message || String(e)); } } }, 'Download');
+      const th = h('button', { class: 'btn small', type: 'button', disabled: !exists, onclick: editThumb }, 'Edit thumbnail');
+      return h('div', { class: 'screen' + (exists ? '' : ' off') },
+        h('div', { class: 'screen-head' }, h('strong', {}, label), h('span', { class: 'sub grow' }, meta), corner),
+        p.el,
+        which === 'video' && maker ? maker.status : null,
+        h('div', { class: 'row screen-btns' }, dl, th));
+    };
+    put(screensBox, screen('audio'), screen('video'));
+    if (thumbUrl) players.forEach((x) => x.setThumb(thumbUrl));
   }
 
   /* actions */
   const actions = h('div', { class: 'panel' });
+  const danger = h('div', { class: 'danger-zone' });
   const guarded = (fn) => async () => {
-    actions.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    [actions, danger].forEach((el) => el.querySelectorAll('button').forEach((b) => { b.disabled = true; }));
     try { await fn(); } catch (e) { toast(e.message || String(e)); }
     finally { nav.refresh(); }
   };
@@ -871,14 +932,14 @@ async function existingView(first, nav) {
     if (published() && item.needsRepublish) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Update and republish'));
     if (published()) buttons.push(h('button', { class: 'btn', type: 'button', onclick: guarded(async () => { await unpublishFlow(id); }) }, 'Unpublish'));
     put(actions,
-      h('h3', {}, 'Actions'),
+      h('h3', {}, 'Publishing'),
       flag('Allow comments', 'commentsEnabled'),
       flag('Allow reactions', 'reactionsEnabled'),
       flag('Allow download', 'allowDownload'),
       published() && item.needsRepublish ? h('p', { class: 'muted small' }, 'Something changed (thumbnail or a version). Update to show it on the public page.') : null,
       !busy && (item.mediaPending || item.thumbPending || item.altPending || item.bgPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
-      busy ? null : h('div', { class: 'stack' }, buttons,
-        h('button', { class: 'btn danger', type: 'button', onclick: guarded(async () => { if (await deleteFlow(id)) nav.back(); }) }, 'Delete')));
+      busy ? null : h('div', { class: 'stack' }, buttons));
+    put(danger, busy ? null : h('button', { class: 'btn small danger', type: 'button', onclick: guarded(async () => { if (await deleteFlow(id)) nav.back(); }) }, 'Delete this item'));
   }
 
   /* put the page together */
@@ -886,26 +947,26 @@ async function existingView(first, nav) {
   paintStatus();
   paintDesc();
   paintProgress();
-  paintVersions();
+  paintScreens();
   paintScene();
   paintActions();
+  setThumb();
   const toolbar = h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => nav.back() }, '← Studio'),
     h('button', { class: 'btn small primary', type: 'button', onclick: openEdit }, 'Edit'));
-  const downloadBtn = h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await downloadItem(id); } catch (e) { toast(e.message || String(e)); } } }, 'Download');
   if (window.matchMedia('(min-width: 900px)').matches) {
-    // Laptop: two columns. The item itself (picture, title, description, numbers, comments) on the left; what you do
-    // with it (publish and settings, versions, animated screen) on the right. Phones keep the single column below.
+    // Laptop: two columns, 2 to 1. What listeners get (the audio and video screens, then what is said about it) on the
+    // left; what you do with it (publishing, screen settings, delete) on the right. Phones keep the single column below.
     root.classList.add('item-wide');
     put(root, toolbar,
       h('div', { class: 'ip-grid' },
-        h('div', { class: 'ip-main' }, titleBox, wrap, h('div', { class: 'row' }, thumbEdit, downloadBtn), status, descBox, published() ? statRow : null, commentsBox),
-        h('div', { class: 'ip-side' }, progressSlot, actions, versionsBox, sceneBox)));
+        h('div', { class: 'ip-main' }, titleBox, status, screensBox, descBox, published() ? statRow : null, commentsBox),
+        h('div', { class: 'ip-side' }, progressSlot, actions, sceneBox, danger)));
   } else {
     put(root,
       toolbar,
-      titleBox, wrap, h('div', { class: 'row' }, thumbEdit, downloadBtn), status, descBox,
+      titleBox, status, screensBox, descBox,
       published() ? statRow : null,
-      progressSlot, versionsBox, sceneBox, actions, commentsBox);
+      progressSlot, sceneBox, actions, danger, commentsBox);
   }
 
   disposers.push(onPublishJobs((j) => {
