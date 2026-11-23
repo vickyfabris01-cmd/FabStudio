@@ -142,7 +142,7 @@ function renderLogin() {
       try { await auth.signIn(email.value.trim(), pw.value); await boot(); }
       catch (x) { err.textContent = x.message || 'Sign-in failed.'; btn.disabled = false; }
     },
-  }, h('img', { class: 'login-mark', src: '/studio/icons/mark.png', alt: '', width: 72, height: 73 }), h('h1', {}, 'FabStudio'), h('p', { class: 'muted' }, 'Owner sign-in. After the first time, the app opens without internet.'), email, pw, err, btn);
+  }, h('img', { class: 'login-mark', src: '/studio/icons/logo-full.png', alt: '', width: 220, height: 150 }), h('h1', {}, 'FabStudio'), h('p', { class: 'muted' }, 'Owner sign-in. After the first time, the app opens without internet.'), email, pw, err, btn);
   app.replaceChildren(h('div', { class: 'login-wrap' }, form));
 }
 
@@ -156,7 +156,7 @@ function renderShell() {
   homeBtn = h('button', { class: 'homebtn', type: 'button', hidden: true, onclick: () => goTab('home') }, '‹ Home');
   const tabs = [['studio', 'Studio'], ['poems', 'Poems'], ['live', 'Live'], ['settings', 'Settings']];
   app.replaceChildren(
-    h('header', { class: 'bar' }, h('span', { class: 'brand', onclick: () => { if (isLaptop()) goTab('home'); } }, h('img', { class: 'brand-mark', src: '/studio/icons/mark.png', alt: '', width: 28, height: 28 }), 'FabStudio'), homeBtn, h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
+    h('header', { class: 'bar' }, h('span', { class: 'brand', role: 'img', 'aria-label': 'FabStudio', onclick: () => { if (isLaptop()) goTab('home'); } }, h('img', { class: 'brand-mark', src: '/studio/icons/fs-mark.png', alt: '', width: 48, height: 26 }), h('img', { class: 'brand-word', src: '/studio/icons/wordmark.png', alt: '', width: 132, height: 20 })), homeBtn, h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
     h('main', { id: 'view' }),
     h('nav', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, 'aria-label': l, onclick: () => goTab(k) }, tabIcon(k), h('span', {}, l)))),
   );

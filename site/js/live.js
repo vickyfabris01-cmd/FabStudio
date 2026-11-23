@@ -79,6 +79,8 @@ async function main() {
     if ('ResizeObserver' in window) new ResizeObserver(fit).observe(box);
     return { el: box, set(t) { if (t === now) return; now = t; text.textContent = t; box.title = t; requestAnimationFrame(fit); } };
   };
+  // a music file name read as a title: no extension, underscores as spaces
+  const tidyName = (n) => String(n || '').replace(/\.(mp3|m4a|aac|wav|ogg|opus|flac|webm|mp4)$/i, '').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
   const poemLine = slideLine('l-poem'); const playLine = slideLine('l-play'); const thanksLine = slideLine('l-big');
   const titleBox = document.getElementById('liveTitle');
   const titleEl = document.getElementById('liveTitleText');
@@ -385,7 +387,7 @@ async function main() {
     } else {
       const kids = [];
       if (S.show.on && S.show.poem) { poemLine.set(S.show.poem); kids.push(poemLine.el); }
-      if (S.show.on && S.show.playing) { playLine.set(`♪ Playing ${S.show.playing}`); kids.push(playLine.el); }
+      if (S.show.on && S.show.playing) { playLine.set(`♪ Playing ${tidyName(S.show.playing)}`); kids.push(playLine.el); }
       if (S.listening && S.blocked) kids.push(h('p', { class: 'l-meta' }, 'Tap play to listen.'));
       else if (S.listening) kids.push(bars, h('p', { class: 'l-meta' }, audioOn ? '' : 'The host\'s audio is reconnecting…'));
       else kids.push(h('p', { class: 'l-meta' }, S.stopped ? 'Paused. Tap play to listen.' : audioOn ? 'Connecting the audio…' : 'The audio will start in a moment.'));

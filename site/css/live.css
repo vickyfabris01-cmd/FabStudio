@@ -5,11 +5,13 @@
 .l-badge.on { color: var(--danger); border-color: var(--danger); animation: lpulse 1.8s ease-in-out infinite; }
 @keyframes lpulse { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { .l-badge.on { animation: none; } }
-.l-stage { position: relative; border-radius: 14px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); margin: .8rem 0; min-height: 150px; display: grid; }
+.l-stage { position: relative; border-radius: 14px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); margin: .8rem 0; min-height: 150px; display: grid; grid-template-columns: minmax(0, 1fr); }   /* minmax(0,…): a long unbroken title must not widen the card */
 .l-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .55; }
-.l-stagebody { position: relative; display: flex; flex-direction: column; padding: .7rem .9rem 1rem; }
+.l-stagebody { position: relative; display: flex; flex-direction: column; padding: .7rem .9rem 1rem; min-width: 0; }
 .l-stage .l-over { text-align: center; padding: .4rem 0 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .l-stage .l-over p { margin: .25rem 0; }
+.l-stage .l-over { min-width: 0; width: 100%; }
+.l-stage .l-over > .l-slide { width: 100%; max-width: 100%; }   /* the line is as wide as the card, so a long title slides instead of pushing the bars off */
 .l-cardtop { flex-wrap: nowrap; min-height: 1.6rem; }
 .l-cardtop2 { display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; }
 .l-ctop-left, .l-ctop-right { display: flex; flex-direction: column; gap: .4rem; }
@@ -29,7 +31,7 @@
 .l-btn { font: inherit; color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 999px; padding: .75rem 1.6rem; font-weight: 600; min-height: 48px; cursor: pointer; }
 .l-btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
 .l-btn:disabled { opacity: .5; }
-.l-bars { display: flex; gap: 4px; align-items: end; justify-content: center; height: 34px; margin-top: .8rem; }
+.l-bars { flex: none; display: flex; gap: 4px; align-items: end; justify-content: center; height: 34px; margin-top: .8rem; }
 .l-bars b { width: 5px; background: var(--accent); border-radius: 3px; height: 8%; transition: height .08s linear; }
 .l-row { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
 .l-row .grow { flex: 1; }

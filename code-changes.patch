@@ -1,0 +1,168 @@
+diff --git a/site/css/live.css b/site/css/live.css
+index b8d7523..f58ec94 100644
+--- a/site/css/live.css
++++ b/site/css/live.css
+@@ -5,11 +5,13 @@
+ .l-badge.on { color: var(--danger); border-color: var(--danger); animation: lpulse 1.8s ease-in-out infinite; }
+ @keyframes lpulse { 50% { opacity: .55; } }
+ @media (prefers-reduced-motion: reduce) { .l-badge.on { animation: none; } }
+-.l-stage { position: relative; border-radius: 14px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); margin: .8rem 0; min-height: 150px; display: grid; }
++.l-stage { position: relative; border-radius: 14px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); margin: .8rem 0; min-height: 150px; display: grid; grid-template-columns: minmax(0, 1fr); }   /* minmax(0,…): a long unbroken title must not widen the card */
+ .l-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .55; }
+-.l-stagebody { position: relative; display: flex; flex-direction: column; padding: .7rem .9rem 1rem; }
++.l-stagebody { position: relative; display: flex; flex-direction: column; padding: .7rem .9rem 1rem; min-width: 0; }
+ .l-stage .l-over { text-align: center; padding: .4rem 0 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+ .l-stage .l-over p { margin: .25rem 0; }
++.l-stage .l-over { min-width: 0; width: 100%; }
++.l-stage .l-over > .l-slide { width: 100%; max-width: 100%; }   /* the line is as wide as the card, so a long title slides instead of pushing the bars off */
+ .l-cardtop { flex-wrap: nowrap; min-height: 1.6rem; }
+ .l-cardtop2 { display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; }
+ .l-ctop-left, .l-ctop-right { display: flex; flex-direction: column; gap: .4rem; }
+@@ -29,7 +31,7 @@
+ .l-btn { font: inherit; color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 999px; padding: .75rem 1.6rem; font-weight: 600; min-height: 48px; cursor: pointer; }
+ .l-btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+ .l-btn:disabled { opacity: .5; }
+-.l-bars { display: flex; gap: 4px; align-items: end; justify-content: center; height: 34px; margin-top: .8rem; }
++.l-bars { flex: none; display: flex; gap: 4px; align-items: end; justify-content: center; height: 34px; margin-top: .8rem; }
+ .l-bars b { width: 5px; background: var(--accent); border-radius: 3px; height: 8%; transition: height .08s linear; }
+ .l-row { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
+ .l-row .grow { flex: 1; }
+diff --git a/site/js/live.js b/site/js/live.js
+index f01e4ae..3e4f347 100644
+--- a/site/js/live.js
++++ b/site/js/live.js
+@@ -79,6 +79,8 @@ async function main() {
+     if ('ResizeObserver' in window) new ResizeObserver(fit).observe(box);
+     return { el: box, set(t) { if (t === now) return; now = t; text.textContent = t; box.title = t; requestAnimationFrame(fit); } };
+   };
++  // a music file name read as a title: no extension, underscores as spaces
++  const tidyName = (n) => String(n || '').replace(/\.(mp3|m4a|aac|wav|ogg|opus|flac|webm|mp4)$/i, '').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
+   const poemLine = slideLine('l-poem'); const playLine = slideLine('l-play'); const thanksLine = slideLine('l-big');
+   const titleBox = document.getElementById('liveTitle');
+   const titleEl = document.getElementById('liveTitleText');
+@@ -385,7 +387,7 @@ async function main() {
+     } else {
+       const kids = [];
+       if (S.show.on && S.show.poem) { poemLine.set(S.show.poem); kids.push(poemLine.el); }
+-      if (S.show.on && S.show.playing) { playLine.set(`♪ Playing ${S.show.playing}`); kids.push(playLine.el); }
++      if (S.show.on && S.show.playing) { playLine.set(`♪ Playing ${tidyName(S.show.playing)}`); kids.push(playLine.el); }
+       if (S.listening && S.blocked) kids.push(h('p', { class: 'l-meta' }, 'Tap play to listen.'));
+       else if (S.listening) kids.push(bars, h('p', { class: 'l-meta' }, audioOn ? '' : 'The host\'s audio is reconnecting…'));
+       else kids.push(h('p', { class: 'l-meta' }, S.stopped ? 'Paused. Tap play to listen.' : audioOn ? 'Connecting the audio…' : 'The audio will start in a moment.'));
+diff --git a/site/studio/css/studio.css b/site/studio/css/studio.css
+index 0c41d3d..8892737 100644
+--- a/site/studio/css/studio.css
++++ b/site/studio/css/studio.css
+@@ -11,7 +11,7 @@ body { padding-top: env(safe-area-inset-top); }
+ #app { min-height: 100dvh; display: flex; flex-direction: column; }
+ .boot { margin: 40vh auto 0; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: .8rem; }
+ .boot p { margin: 0; }
+-.boot-mark { width: 64px; height: auto; display: block; }
++.boot-mark { width: min(240px, 62vw); height: auto; display: block; }
+ h1, h2, h3 { font-family: var(--serif); font-weight: 600; margin: 0; }
+ h2 { font-size: 1.5rem; }
+ h3 { font-size: 1.05rem; margin-bottom: .6rem; }
+@@ -24,7 +24,9 @@ p { margin: .4rem 0; }
+ /* top bar + tabs */
+ .bar { display: flex; align-items: center; justify-content: space-between; padding: .7rem 1rem; border-bottom: 1px solid var(--line); position: sticky; top: env(safe-area-inset-top); background: var(--bg); z-index: 5; }
+ .brand { display: inline-flex; align-items: center; gap: .5rem; font-family: var(--serif); font-size: 1.2rem; letter-spacing: .01em; }
+-.brand-mark { height: 28px; width: auto; display: block; }
++.brand-mark { height: 26px; width: auto; display: block; }
++.brand-word { height: 20px; width: auto; display: none; }   /* phones show the FS mark alone; wider screens add the wordmark */
++@media (min-width: 560px) { .brand-word { display: block; } }
+ .pill { font: inherit; font-size: .8rem; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem; }
+ .pill[data-state='syncing'] { color: var(--accent); border-color: var(--accent); }
+ .pill[data-state='error'], .pill[data-state='auth'] { color: var(--danger); border-color: var(--danger); }
+@@ -84,7 +86,7 @@ input.inline, select.inline { min-height: 36px; padding: .3rem .6rem; background
+ .login-wrap { flex: 1; display: grid; place-items: center; padding: 1.5rem; }
+ .login { width: 100%; max-width: 360px; display: grid; gap: .8rem; }
+ .login h1 { font-size: 2rem; }
+-.login-mark { width: 72px; height: auto; justify-self: start; }
++.login-mark { width: min(220px, 70%); height: auto; justify-self: center; margin-bottom: .2rem; }
+ 
+ /* toast */
+ #toast { position: fixed; left: 50%; bottom: calc(5rem + env(safe-area-inset-bottom)); transform: translate(-50%, 10px); background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 10px; max-width: 90vw; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 20; }
+@@ -564,6 +566,7 @@ body.le-open { overflow: hidden; }
+ 
+ /* ---------- Baking console: the take shown in the right-hand pane ---------- */
+ .baking-console .c-chat .chat-list { gap: .5rem; }
++.baking-console .c-chat .chat-list:empty::before { content: ''; flex: 1; opacity: .12; pointer-events: none; background: url(/studio/icons/logo-full.png) center / min(72%, 320px) no-repeat; }   /* the empty right pane carries the logo; it goes when the take appears */
+ .baking-console .c-chat input:disabled, .baking-console .c-chat .btn:disabled { opacity: .45; cursor: default; }
+ .bk-take { display: flex; flex-direction: column; gap: .5rem; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+ .bk-title { font-family: var(--serif); font-size: 1.1rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+diff --git a/site/studio/index.html b/site/studio/index.html
+index 7265498..d7e3b6b 100644
+--- a/site/studio/index.html
++++ b/site/studio/index.html
+@@ -6,12 +6,12 @@
+   <meta name="theme-color" content="#14121a">
+   <title>FabStudio</title>
+   <link rel="manifest" href="/studio/manifest.webmanifest">
+-  <link rel="icon" href="/studio/icons/icon-192.png">
+-  <link rel="apple-touch-icon" href="/studio/icons/icon-192.png">
++  <link rel="icon" type="image/png" href="/studio/icons/favicon-64.png">
++  <link rel="apple-touch-icon" href="/studio/icons/apple-touch-180.png">
+   <link rel="stylesheet" href="/studio/css/studio.css">
+ </head>
+ <body>
+-  <div id="app"><div class="boot"><img class="boot-mark" src="/studio/icons/mark.png" alt="" width="64" height="65"><p>Opening FabStudio…</p></div></div>
++  <div id="app"><div class="boot"><img class="boot-mark" src="/studio/icons/logo-full.png" alt="" width="240" height="164"><p>Opening FabStudio…</p></div></div>
+   <noscript>FabStudio needs JavaScript.</noscript>
+ 
+   <!-- Startup watchdog: if the app cannot start, show why instead of staying on "Opening FabStudio…".
+diff --git a/site/studio/js/app.js b/site/studio/js/app.js
+index 91941fe..8e139be 100644
+--- a/site/studio/js/app.js
++++ b/site/studio/js/app.js
+@@ -142,7 +142,7 @@ function renderLogin() {
+       try { await auth.signIn(email.value.trim(), pw.value); await boot(); }
+       catch (x) { err.textContent = x.message || 'Sign-in failed.'; btn.disabled = false; }
+     },
+-  }, h('img', { class: 'login-mark', src: '/studio/icons/mark.png', alt: '', width: 72, height: 73 }), h('h1', {}, 'FabStudio'), h('p', { class: 'muted' }, 'Owner sign-in. After the first time, the app opens without internet.'), email, pw, err, btn);
++  }, h('img', { class: 'login-mark', src: '/studio/icons/logo-full.png', alt: '', width: 220, height: 150 }), h('h1', {}, 'FabStudio'), h('p', { class: 'muted' }, 'Owner sign-in. After the first time, the app opens without internet.'), email, pw, err, btn);
+   app.replaceChildren(h('div', { class: 'login-wrap' }, form));
+ }
+ 
+@@ -156,7 +156,7 @@ function renderShell() {
+   homeBtn = h('button', { class: 'homebtn', type: 'button', hidden: true, onclick: () => goTab('home') }, '‹ Home');
+   const tabs = [['studio', 'Studio'], ['poems', 'Poems'], ['live', 'Live'], ['settings', 'Settings']];
+   app.replaceChildren(
+-    h('header', { class: 'bar' }, h('span', { class: 'brand', onclick: () => { if (isLaptop()) goTab('home'); } }, h('img', { class: 'brand-mark', src: '/studio/icons/mark.png', alt: '', width: 28, height: 28 }), 'FabStudio'), homeBtn, h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
++    h('header', { class: 'bar' }, h('span', { class: 'brand', role: 'img', 'aria-label': 'FabStudio', onclick: () => { if (isLaptop()) goTab('home'); } }, h('img', { class: 'brand-mark', src: '/studio/icons/fs-mark.png', alt: '', width: 48, height: 26 }), h('img', { class: 'brand-word', src: '/studio/icons/wordmark.png', alt: '', width: 132, height: 20 })), homeBtn, h('button', { class: 'onair-pill', id: 'onair', hidden: true, onclick: () => openLive(engine.s.itemId) }, '● On air'), pill),
+     h('main', { id: 'view' }),
+     h('nav', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, 'aria-label': l, onclick: () => goTab(k) }, tabIcon(k), h('span', {}, l)))),
+   );
+diff --git a/site/studio/sw.js b/site/studio/sw.js
+index 2b08eae..9f00ec2 100644
+--- a/site/studio/sw.js
++++ b/site/studio/sw.js
+@@ -1,14 +1,14 @@
+ // FabStudio service worker: makes the app open offline.
+ // Files are served from cache instantly and refreshed in the background,
+ // so a new deploy shows up on the second open. Bump CACHE only to force a full reset.
+-const CACHE = 'fabstudio-shell-v15';
++const CACHE = 'fabstudio-shell-v16';
+ const SHELL = [
+   '/studio/', '/studio/index.html', '/studio/manifest.webmanifest', '/studio/css/studio.css',
+   '/studio/js/app.js', '/studio/js/db.js', '/studio/js/ui.js', '/studio/js/auth.js', '/studio/js/api.js',
+   '/studio/js/sync.js', '/studio/js/recorder.js', '/studio/js/mixer.js', '/studio/js/baker.js', '/studio/js/publish.js', '/studio/js/publisher.js', '/studio/js/thumbs.js', '/studio/js/live.js', '/studio/js/live-engine.js', '/studio/js/live-audio.js',
+   '/studio/js/console/header.js', '/studio/js/console/stats.js', '/studio/js/console/reading.js', '/studio/js/console/myaudio.js', '/studio/js/console/deck.js', '/studio/js/console/source.js', '/studio/js/console/chatfeed.js', '/studio/js/console/settings-modal.js', '/studio/js/console/recap.js', '/studio/js/console/webm-cut.js', '/studio/js/console/playlist.js', '/studio/js/home.js', '/studio/js/performance.js', '/studio/js/stats-data.js', '/studio/js/thumb-picker.js', '/studio/js/select.js', '/shared/live-socket.js', '/shared/sfu.js', '/shared/live-settings.js', '/shared/dl-name.js',
+   '/studio/js/mp4-mux.js', '/studio/js/mp4-audio.js', '/studio/js/audio-encode.js', '/studio/js/scene-render.js', '/studio/js/scene-panel.js', '/studio/js/lyrics-editor.js', '/shared/scene.js',
+-  '/studio/icons/icon-192.png', '/studio/icons/icon-512.png', '/studio/icons/mark.png',
++  '/studio/icons/icon-192.png', '/studio/icons/icon-512.png', '/studio/icons/mark.png', '/studio/icons/fs-mark.png', '/studio/icons/wordmark.png', '/studio/icons/logo-full.png', '/studio/icons/favicon-64.png', '/studio/icons/apple-touch-180.png',
+   '/shared/config.js', '/shared/supabase.js', '/shared/vendor/dexie.min.js', '/shared/vendor/supabase.js',
+ ];
+ 
+diff --git a/site/sw.js b/site/sw.js
+index afdb2d8..0e29058 100644
+--- a/site/sw.js
++++ b/site/sw.js
+@@ -2,7 +2,7 @@
+ // when someone opens it with no connection. It never stores poems, audio, video or API answers: everything else
+ // goes straight to the network, so the live, reactions and comments behave exactly as before.
+ // The Studio has its own service worker (/studio/sw.js) and is left alone here.
+-const CACHE = 'fabris-public-v3';
++const CACHE = 'fabris-public-v4';
+ const OFFLINE = '/offline.html';
+ 
+ self.addEventListener('install', (e) => {
