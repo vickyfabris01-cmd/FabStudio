@@ -9,5 +9,5 @@ export const CONFIG = {
   // URL printed by `npx wrangler deploy` for the fabstudio-api Worker (no trailing slash)
   API_BASE: "https://fabstudio-api.domanmando10.workers.dev",
   // Phase 2 only (Google sign-in for viewers). Leave empty for now.
-  GOOGLE_CLIENT_ID: "",
+  GOOGLE_CLIENT_ID: "729527767920-nu0lai0dckqqdtqj2m4frugrorv0mmmn.apps.googleusercontent.com",
 };
