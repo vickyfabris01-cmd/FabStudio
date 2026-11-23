@@ -15,7 +15,12 @@ export function consoleHeader({ engine, nav, itemId, openSettings, slot }) {
   const status = h('span', { class: 'badge' });
   const timer = h('b', { class: 'c-clock' });
   const info = h('span', { class: 'small muted c-info' });
-  const retry = h('button', { class: 'btn small', type: 'button', hidden: true, onclick: () => engine.retryAudio() }, 'Retry audio');
+  // What listeners are getting, in one badge (green / amber / red), and a Reconnect button that is there the whole time you are on air.
+  const health = h('span', { class: 'c-health', hidden: true, role: 'status' }, h('i', { class: 'c-hdot', 'aria-hidden': 'true' }), h('span', { class: 'c-htext' }));
+  const retry = h('button', { class: 'btn small', type: 'button', hidden: true, title: 'Reopen the soundcard and rebuild the audio connection', onclick: async () => {
+    retry.disabled = true;
+    try { await engine.reconnect(); } finally { retry.disabled = false; }
+  } }, 'Reconnect');
   const mark = h('button', { class: 'btn small', type: 'button', hidden: true, title: 'Mark this moment in the recording' }, '+ Timestamp');
   mark.onclick = async () => { const at = engine.rec ? Math.round(engine.rec.seconds()) : 0; await engine.addMarker({ label: 'Timestamp', kind: 'dead moment' }); toast(`Timestamp added at ${fmtDur(at)}.`); };
   const end = h('button', { class: 'btn small danger', type: 'button', hidden: true }, 'End live');
@@ -25,7 +30,7 @@ export function consoleHeader({ engine, nav, itemId, openSettings, slot }) {
   const el = h('div', { class: 'card c-head' },
     h('div', { class: 'row c-headrow' },
       h('button', { class: 'btn small', type: 'button', onclick: () => nav.liveList() }, '‹ Lives'),
-      h('div', { class: 'grow' }, slot), status, timer, info, retry, mark, end, link, gear));
+      h('div', { class: 'grow' }, slot), status, timer, health, info, retry, mark, end, link, gear));
 
   function paint() {
     const st = engine.s;
@@ -34,9 +39,18 @@ export function consoleHeader({ engine, nav, itemId, openSettings, slot }) {
     status.className = 'badge' + (live ? ' onair' : '');
     timer.textContent = live && st.room?.startedAt ? clock((Date.now() - st.room.startedAt) / 1000) : '';
     end.hidden = !live; mark.hidden = !live;
-    retry.hidden = !(live && st.audioState === 'lost');
+    retry.hidden = !live;
+    const hl = live ? engine.health() : null;
+    health.hidden = !hl;
+    if (hl) {
+      health.dataset.level = hl.level;
+      health.title = hl.hint || '';
+      const tx = health.querySelector('.c-htext');
+      if (tx.textContent !== hl.text) tx.textContent = hl.text;
+    }
+    retry.classList.toggle('attn', !!hl && hl.level === 'bad');
     const conn = { open: '', connecting: 'Connecting to the room…', reconnecting: 'Reconnecting to the room…', closed: '' }[st.conn] || '';
-    const rec = live ? `Rec ${fmtDur(st.recSeconds)}${st.audioState === 'connecting' ? ' · reconnecting audio…' : ''}` : '';
+    const rec = live ? `Rec ${fmtDur(st.recSeconds)}` : '';
     info.textContent = [rec, conn].filter(Boolean).join('  ·  ');
     if (document.activeElement !== titleIn) titleIn.value = st.row.title;
   }

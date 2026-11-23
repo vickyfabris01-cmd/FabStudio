@@ -9,12 +9,23 @@ import { CONFIG } from './config.js';
 
 const ICE = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 
+// Every request gives up after 15 seconds. A request that never answers (a weak connection) used to freeze the
+// whole reconnect; now it fails, and the caller can try again.
 async function api(path, { method = 'POST', token, body }) {
-  const res = await fetch(CONFIG.API_BASE + path, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  let res;
+  try {
+    res = await fetch(CONFIG.API_BASE + path, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+  } catch (e) {
+    if (e?.name === 'AbortError') { const t = new Error('The audio service did not answer in time. Check your connection.'); t.status = 0; throw t; }
+    throw e;
+  } finally { clearTimeout(timer); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const e = new Error(data.error || `api-${res.status}`);

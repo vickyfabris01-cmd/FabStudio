@@ -23,6 +23,15 @@ const fresh = () => ({
   phase: 'idle',                     // idle | ready (soundcard open) | starting | live | ended
   audioState: '',                    // '' | connecting | ok | lost
   level: 0, error: '', captureId: null, recSeconds: 0,
+  inputMuted: false,                 // the soundcard stopped delivering sound (the browser still lists it)
+  sending: null,                     // true/false: are audio packets leaving this laptop (null: not known yet)
+  silentFor: 0,                      // seconds the input level has been silent
+  listeners: null,                   // the room's summary of what listeners get: { n, good, fair, poor, stalled, silent, rcv }
+});
+
+const withTimeout = (p, ms, message) => new Promise((resolve, reject) => {
+  const t = setTimeout(() => reject(new Error(message)), ms);
+  p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
 });
 
 class LiveEngine extends EventTarget {
@@ -30,7 +39,9 @@ class LiveEngine extends EventTarget {
     super();
     this.s = fresh();
     this.audio = null; this.pub = null; this.rec = null; this.room = null;
-    this.meter = null; this.repub = null; this.deviceId = '';
+    this.meter = null; this.repub = 0; this.deviceId = '';
+    this.pubSeq = 0;                                // each publish gets a number; a late, older one is thrown away
+    this.healthTimer = null; this.lastPackets = null; this.noSendTicks = 0; this.mutedTicks = 0; this.offTicks = 0; this.lastAuto = 0; this.lastAnnounce = 0;
   }
 
   emit() { this.dispatchEvent(new Event('change')); }
@@ -65,6 +76,7 @@ class LiveEngine extends EventTarget {
   async close() {
     if (this.active) return;
     clearInterval(this.countsTimer);
+    this.stopHealth();
     this.room?.close(); this.room = null;
     await this.stopAudio();
     this.s = fresh();
@@ -79,7 +91,9 @@ class LiveEngine extends EventTarget {
     this.room.send({ t: 'title', text: row.title });
     this.sendPoems();
     this.sendShow();
-    if (this.pub && this.s.phase === 'live') this.room.send({ t: 'broadcaster', sessionId: this.pub.sessionId, trackName: this.pub.trackName });
+    // We are the broadcaster, so take the room back: after a drop the room may still hold our old, dead connection
+    // and would otherwise answer "already on air from another window".
+    if (this.pub && this.s.phase === 'live') this.room.send({ t: 'broadcaster', sessionId: this.pub.sessionId, trackName: this.pub.trackName, takeover: true });
   }
 
   onMessage(m) {
@@ -112,6 +126,7 @@ class LiveEngine extends EventTarget {
         if (typeof m.all === 'number') s.shares = Math.max(s.shares, m.all);
         this.pushEvent({ kind: 'shared', name: m.name, uid8: m.uid8, total: m.total });
         break;
+      case 'listeners': s.listeners = { n: m.n | 0, good: m.good | 0, fair: m.fair | 0, poor: m.poor | 0, stalled: m.stalled | 0, silent: m.silent | 0, rcv: Date.now() }; break;
       case 'view': s.views += 1; break;
       case 'views': if (typeof m.n === 'number') s.views = Math.max(s.views, m.n); break;   // the real total from the database
       case 'taken':
@@ -236,10 +251,13 @@ class LiveEngine extends EventTarget {
   /* ---------- the soundcard ---------- */
   async prepare(deviceId = this.deviceId) {
     this.deviceId = deviceId;
-    if (this.audio) { await this.audio.useDevice(deviceId); return this.audio; }
+    if (this.audio) { await this.audio.useDevice(deviceId); this.deviceId = this.audio.activeId || deviceId; this.s.inputMuted = this.audio.inputMuted; this.emit(); return this.audio; }
     const a = new LiveAudio();
     await a.start({ deviceId });
-    a.onLost = () => { if (this.s.phase === 'live') this.set({ error: 'The audio input was lost. Plug it back in, then press Retry audio.' , audioState: 'lost' }); };
+    this.deviceId = a.activeId || deviceId;
+    a.onLost = () => { if (this.s.phase === 'live') this.set({ error: 'The audio input was lost. Plug it back in, then press Reconnect.', audioState: 'lost', inputMuted: true }); };
+    a.onMute = (m) => { this.s.inputMuted = m; this.emit(); };
+    a.onCtxState = (st) => { if (st !== 'running' && st !== 'closed') a.wake(); };
     this.audio = a;
     this.meter = setInterval(() => {
       this.s.level = a.level();
@@ -253,6 +271,7 @@ class LiveEngine extends EventTarget {
 
   async stopAudio() {
     clearInterval(this.meter); this.meter = null;
+    this.stopHealth();
     try { this.pub?.close(); } catch { /* closed */ }
     this.pub = null;
     if (this.audio) { await this.audio.stop(); this.audio = null; }
@@ -276,6 +295,7 @@ class LiveEngine extends EventTarget {
       this.set({ phase: 'live', audioState: 'ok' });
       sb.from('live_sessions').update({ capture_id: this.rec.id }).eq('item_id', s.itemId).then(() => {});
       this.watchConnection();
+      this.startHealth();
     } catch (e) {
       try { await this.rec?.discard(); } catch { /* ignore */ }
       this.rec = null; s.captureId = null;
@@ -288,12 +308,22 @@ class LiveEngine extends EventTarget {
 
   async publish(takeover) {
     const { settings } = this.s.row;
-    this.pub = await publishAudio({ item: this.s.itemId, getToken, track: this.audio.track, kbps: settings.audioKbps, stereo: settings.stereo });
+    const my = ++this.pubSeq;
+    const pub = await publishAudio({ item: this.s.itemId, getToken, track: this.audio.track, kbps: settings.audioKbps, stereo: settings.stereo });
+    // A newer attempt started while this one was still connecting (it was too slow): this one is thrown away.
+    if (my !== this.pubSeq) { try { pub.close(); } catch { /* closed */ } throw new Error('Replaced by a newer attempt.'); }
+    this.pub = pub;
     const ok = await this.ack(takeover);
-    if (!ok) { this.pub.close(); this.pub = null; throw new Error('This live is already on air from another window.'); }
+    if (my !== this.pubSeq) { try { pub.close(); } catch { /* closed */ } throw new Error('Replaced by a newer attempt.'); }
+    if (ok !== true) {
+      try { pub.close(); } catch { /* closed */ }
+      if (this.pub === pub) this.pub = null;
+      throw new Error(ok === 'timeout' ? 'The live room did not answer. Check your connection.' : 'This live is already on air from another window.');
+    }
   }
 
   // Tell the room which track is ours and wait for its answer (a state with our epoch, or an error).
+  // Resolves true, false (another window holds the broadcast) or 'timeout' (no answer in 8 seconds).
   ack(takeover) {
     return new Promise((resolve) => {
       const stop = this.on(() => {
@@ -301,9 +331,9 @@ class LiveEngine extends EventTarget {
         if (this.s.error.startsWith('This live is already')) { stop(); clearTimeout(t); resolve(false); }
         else if (r?.broadcaster?.online && r.broadcaster.sessionId === this.pub?.sessionId) { stop(); clearTimeout(t); resolve(true); }
       });
-      const t = setTimeout(() => { stop(); resolve(false); }, 8000);
+      const t = setTimeout(() => { stop(); resolve('timeout'); }, 8000);
       this.s.error = '';
-      this.send({ t: 'golive', sessionId: this.pub.sessionId, trackName: this.pub.trackName, takeover: !!takeover });
+      if (!this.send({ t: 'golive', sessionId: this.pub.sessionId, trackName: this.pub.trackName, takeover: !!takeover })) { stop(); clearTimeout(t); resolve('timeout'); }
     });
   }
 
@@ -320,23 +350,112 @@ class LiveEngine extends EventTarget {
     };
   }
 
-  async retryAudio() {
-    if (this.s.phase !== 'live' || this.repub) return;
-    this.repub = true;
+  // Rebuilds the audio path while live: wake the audio engine, reopen the soundcard if it is stuck (or when forced),
+  // publish again taking over the room, and watch the new connection. The recording keeps going the whole time.
+  // A stuck attempt is given up after 30 seconds, so Reconnect always works.
+  async retryAudio(force = false) {
+    if (this.s.phase !== 'live') return;
+    if (this.repub && !force && Date.now() - this.repub < 30000) return;
+    const mine = this.repub = Date.now();
     this.set({ audioState: 'connecting', error: '' });
     try {
-      try { this.pub?.close(); } catch { /* closed */ }
-      this.pub = null;
-      if (!this.audio?.track || this.audio.track.readyState !== 'live') await this.audio.useDevice(this.deviceId);
-      await this.publish(true);
+      await withTimeout((async () => {
+        try { this.pub?.close(); } catch { /* closed */ }
+        this.pub = null;
+        if (!this.audio) throw new Error('The soundcard is not open. Choose an input, then press Reconnect.');
+        await this.audio.wake();
+        const t = this.audio.inputTrack;
+        if (force || !t || t.readyState !== 'live' || t.muted) {
+          await this.audio.useDevice(this.deviceId, { reopen: true });
+          this.deviceId = this.audio.activeId || this.deviceId;
+          this.s.inputMuted = this.audio.inputMuted;
+        }
+        if (!this.room) throw new Error('Not connected to the live room.');
+        await this.publish(true);
+      })(), 30000, 'Reconnecting took too long. Trying again.');
       this.watchConnection();
+      this.lastPackets = null; this.noSendTicks = 0; this.offTicks = 0;
       this.set({ audioState: 'ok' });
     } catch (e) {
+      this.pubSeq++;                       // anything still connecting from this attempt is now thrown away
+      try { this.pub?.close(); } catch { /* closed */ }
+      this.pub = null;
       this.set({ audioState: 'lost', error: friendly(e) });
-      setTimeout(() => { this.repub = null; if (this.s.phase === 'live' && this.s.audioState === 'lost') this.retryAudio(); }, 5000);
+      setTimeout(() => { if (this.repub === mine) this.repub = 0; if (this.s.phase === 'live' && this.s.audioState === 'lost') this.retryAudio(); }, 5000);
       return;
     }
-    this.repub = null;
+    if (this.repub === mine) this.repub = 0;
+  }
+
+  // The Reconnect button: reconnect the room if it dropped, then rebuild the audio path from the soundcard up.
+  async reconnect() {
+    if (this.s.phase !== 'live') return;
+    this.room?.hello();
+    await this.retryAudio(true);
+  }
+
+  /* ---------- health: what listeners are getting ---------- */
+  startHealth() {
+    this.stopHealth();
+    this.lastPackets = null; this.noSendTicks = 0; this.mutedTicks = 0; this.offTicks = 0;
+    this.healthTimer = setInterval(() => { this.healthTick().catch(() => {}); }, 2000);
+  }
+  stopHealth() { clearInterval(this.healthTimer); this.healthTimer = null; }
+
+  async healthTick() {
+    const s = this.s;
+    if (s.phase !== 'live') return;
+    const a = this.audio;
+    if (a) { await a.wake(); s.inputMuted = a.inputMuted; }
+    s.silentFor = s.level < 0.02 ? s.silentFor + 2 : 0;
+    this.mutedTicks = s.inputMuted ? this.mutedTicks + 1 : 0;
+
+    // Are packets leaving this laptop?
+    const pc = this.pub?.pc;
+    if (pc && s.audioState === 'ok') {
+      let packets = null;
+      try { (await pc.getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && (r.kind || r.mediaType) === 'audio') packets = r.packetsSent; }); } catch { /* keep what we knew */ }
+      if (typeof packets === 'number') {
+        s.sending = this.lastPackets == null ? null : packets > this.lastPackets;
+        this.noSendTicks = s.sending === false ? this.noSendTicks + 1 : 0;
+        this.lastPackets = packets;
+      }
+    } else { s.sending = null; this.lastPackets = null; this.noSendTicks = 0; }
+
+    // Does the room still list us as the broadcaster?
+    const r = s.room;
+    const roomOff = s.conn === 'open' && s.audioState === 'ok' && r?.status === 'live' && r.broadcaster && !r.broadcaster.online;
+    this.offTicks = roomOff ? this.offTicks + 1 : 0;
+    if (this.offTicks >= 2 && this.pub && Date.now() - this.lastAnnounce > 6000) {
+      this.lastAnnounce = Date.now();
+      this.send({ t: 'broadcaster', sessionId: this.pub.sessionId, trackName: this.pub.trackName, takeover: true });   // cheap first: say again that we are here
+    }
+
+    // Heal by itself: an input that stays silent at the device, packets that stop leaving, or a room that still
+    // says offline after being told. At most once every 20 seconds.
+    const stuck = this.mutedTicks >= 3 || this.noSendTicks >= 3 || this.offTicks >= 5;
+    if (stuck && s.audioState === 'ok' && Date.now() - this.lastAuto > 20000) { this.lastAuto = Date.now(); this.retryAudio(true); }
+    this.emit();
+  }
+
+  // One line for the header badge: { level: 'good' | 'warn' | 'bad', text, hint }. Null when not on air.
+  health() {
+    const s = this.s;
+    if (s.phase !== 'live') return null;
+    const L = s.listeners && Date.now() - s.listeners.rcv < 45000 ? s.listeners : null;
+    const bad = (text, hint) => ({ level: 'bad', text, hint });
+    const warn = (text, hint) => ({ level: 'warn', text, hint });
+    if (s.conn !== 'open') return bad("Listeners can't hear you: no room connection", 'This laptop lost its connection to the live room. It reconnects by itself; press Reconnect to rebuild the audio too.');
+    if (s.audioState === 'connecting') return warn('Reconnecting your audio…', 'The audio connection is being rebuilt. The recording keeps going.');
+    if (s.audioState === 'lost') return bad("Listeners can't hear you: audio is down", 'The audio connection is down. Press Reconnect.');
+    if (s.inputMuted) return bad("Listeners can't hear you: input silent", 'The soundcard stopped sending sound. Press Reconnect to reopen it.');
+    if (s.sending === false) return bad("Listeners can't hear you: nothing is leaving this laptop", 'No audio packets are being sent. Press Reconnect.');
+    if (s.room?.broadcaster && !s.room.broadcaster.online) return bad("Listeners can't hear you: the room has no broadcast", 'The live room does not list you as on air. Press Reconnect.');
+    if (L && L.n >= 3 && (L.stalled + (s.silentFor < 6 ? L.silent : 0)) / L.n >= 0.6) return bad(`Listeners can't hear you: ${Math.max(L.stalled, L.silent)} of ${L.n} get no sound`, 'Most listeners get no sound although your side looks fine. Press Reconnect.');
+    if (L && L.stalled + (s.silentFor < 6 ? L.silent : 0) >= 1) return warn(`${Math.max(L.stalled, L.silent)} of ${L.n} ${L.n === 1 ? 'listener gets' : 'listeners get'} no sound`, L.n <= 2 ? 'With so few listeners this may be their own connection.' : 'A few listeners are affected, usually their own connection.');
+    if (L && L.poor >= Math.max(1, Math.ceil(L.n * 0.4))) return warn(`${L.poor} of ${L.n} listeners have a weak connection`, 'Their connection is weak; yours looks fine.');
+    if (s.silentFor >= 20) return warn(`No sound on your input for ${Math.floor(s.silentFor)} s`, 'The input level has been silent. Fine during a pause; check the soundcard if not.');
+    return { level: 'good', text: L ? `Listeners hear you (${L.n} listening)` : 'Sending audio', hint: L ? 'Everything looks fine on your side and for listeners.' : 'Audio is leaving this laptop and the room lists you as on air. No listener reports yet.' };
   }
 
   async end() {
@@ -369,6 +488,7 @@ const friendly = (e) => {
   if (e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError') return 'That audio input was not found. Choose another one.';
   if (e?.status === 501) return 'Live audio is not set up on the Worker yet (see docs/LIVE.md, step 3).';
   if (e?.status === 401 || e?.status === 403) return 'Sign in again: the Worker did not accept this session.';
+  if (e?.name === 'NotReadableError') return 'The soundcard is busy or stuck. Unplug it, plug it back in, then press Reconnect.';
   return e?.detail ? `${m} (${e.detail})` : m;
 };
 

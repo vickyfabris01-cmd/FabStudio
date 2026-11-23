@@ -33,7 +33,17 @@ export function sourceControl() {
   const st = { open: false, q: '', poems: [], files: [], dur: new Map(), music: 'loading', folders: [], folder: null, perm: new Map(), tuneFor: '', tune: '' };
 
   const mode = h('select', { class: 'src-mode', 'aria-label': 'Poem or music' }, h('option', { value: 'poem' }, 'Poem'), h('option', { value: 'music' }, 'Music'));
-  const main = h('span', { class: 'src-main' });
+  // The name of what is picked. When it is too long for the space it slides back and forth (like the live title) instead of widening the row.
+  const mainText = h('span', {});
+  const main = h('span', { class: 'src-main' }, mainText);
+  const fitMain = () => {
+    main.classList.remove('slide');
+    const over = mainText.scrollWidth - main.clientWidth;
+    if (over > 2) { main.style.setProperty('--d', over + 'px'); main.style.setProperty('--t', Math.max(6, (over / 25) * 2) + 's'); main.classList.add('slide'); }
+  };
+  if ('ResizeObserver' in window) new ResizeObserver(fitMain).observe(main);
+  let mainNow = null;
+  const setMain = (t) => { if (t === mainNow) return; mainNow = t; mainText.textContent = t; requestAnimationFrame(fitMain); };
   const sub = h('span', { class: 'src-sub' });
   const name = h('button', { class: 'src-name', type: 'button', 'aria-haspopup': 'listbox', 'aria-expanded': 'false' }, main, sub, h('span', { class: 'src-caret', 'aria-hidden': 'true' }, '▾'));
   const search = h('input', { class: 'ma-search', type: 'search', placeholder: 'Search', 'aria-label': 'Search' });
@@ -181,7 +191,7 @@ export function sourceControl() {
       extra = label && st.tune ? `♪ ${st.tune}` : '';
       if (!label) st.tuneFor = '';
     } else label = source.music?.name || '';
-    main.textContent = label || (source.mode === 'poem' ? 'Click to choose a poem' : 'Click to choose music');
+    setMain(label || (source.mode === 'poem' ? 'Click to choose a poem' : 'Click to choose music'));
     main.classList.toggle('unset', !label);
     sub.textContent = extra;
     name.title = label ? `${label}${extra ? ' · ' + extra : ''}` : '';

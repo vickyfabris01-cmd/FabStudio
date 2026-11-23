@@ -581,3 +581,28 @@ body.le-open { overflow: hidden; }
 .item-wide .cover-wrap { max-width: calc(62vh * 16 / 9); }
 .item-wide .desc.clamp { white-space: pre-wrap; }
 .item-wide .edit-row .linkbtn { display: none; }
+
+/* ---------- console header: nothing may push End live off screen; the listener badge; long music titles slide ---------- */
+#app:has(.console) #view, .console, .c-head, .c-headrow { min-width: 0; }
+.c-head { max-width: 100%; }
+.c-headrow, .console:not(.ended) .c-headrow { flex-wrap: wrap; row-gap: .35rem; }   /* too narrow for one row: End live drops to a second line instead of leaving the screen */
+.c-headrow > .grow { flex: 1 1 15rem; min-width: 12rem; contain: inline-size; }   /* the source control may never widen the row */
+.c-headrow > * { max-width: 100%; }
+.c-info { flex: 0 1 auto; min-width: 0; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-health { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: .4rem; max-width: 20rem; padding: .1rem .6rem; border-radius: 999px; border: 1px solid var(--line); font-size: .78rem; line-height: 1.5; cursor: default; }
+.c-health[hidden] { display: none; }
+.c-hdot { flex: none; width: .55rem; height: .55rem; border-radius: 50%; background: var(--muted); }
+.c-htext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-health[data-level='good'] { border-color: var(--accent); }
+.c-health[data-level='good'] .c-hdot { background: var(--accent); }
+.c-health[data-level='warn'] { border-color: #d9a21b; }
+.c-health[data-level='warn'] .c-hdot { background: #d9a21b; }
+.c-health[data-level='bad'] { border-color: var(--rec); color: var(--rec); }
+.c-health[data-level='bad'] .c-hdot { background: var(--rec); animation: pulse 1.6s ease-in-out infinite; }
+.btn.attn { border-color: var(--rec); background: var(--rec); color: #fff; }
+.src-main { display: block; }
+.src-main > span { display: inline-block; white-space: nowrap; }
+.src-main.slide { text-overflow: clip; -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%); }
+.src-main.slide > span { animation: src-slide var(--t, 8s) linear infinite alternate; }
+@keyframes src-slide { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(calc(-1 * var(--d, 0px))); } }
+@media (prefers-reduced-motion: reduce) { .src-main.slide > span { animation: none; } .src-main > span { display: inline; } .src-main.slide { -webkit-mask-image: none; mask-image: none; text-overflow: ellipsis; } }

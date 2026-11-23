@@ -61,6 +61,8 @@ export class LiveRoom {
     this.st = fresh();
     this.chat = [];
     this.rate = new Map();         // uid -> recent message times
+    this.quals = new Map();        // uid -> { q: good|fair|poor|stalled, s: 1 if the sound they get is silent, at }  what listeners report about the audio they receive
+    this.qPushed = 0; this.qTimer = null;
     this.lastChat = new Map();     // uid -> last chat time (slow mode)
     this.tokens = new Map();       // token -> { user, until }
     this.pulses = { love: 0, like: 0 };
@@ -172,8 +174,42 @@ export class LiveRoom {
     }
     this.scheduleCount();
     await this.armAlarm();
+    if (owner && att.console) this.send(ws, this.listenerSummary());
     if (owner && att.console) this.viewsTotal().then((n) => { if (n != null) this.send(ws, { t: 'views', n }); });   // a console that opens later starts from the real total
     if (!owner && !this.isBlocked(att)) await this.recordView(att);
+  }
+
+  /* ---------- what listeners report about the audio they get ---------- */
+  noteQuality(att, m) {
+    if (att.owner || this.st.status !== 'live') return;
+    const now = Date.now();
+    if (m.off) { if (this.quals.delete(att.uid)) this.pushListeners(); return; }
+    const q = ['good', 'fair', 'poor', 'stalled'].includes(m.q) ? m.q : null;
+    if (!q) return;
+    const prev = this.quals.get(att.uid);
+    if (prev && now - prev.at < 3000) return;                 // too soon after the last report: ignored
+    if (!prev && this.quals.size >= 2000) return;
+    this.quals.set(att.uid, { q, s: m.s ? 1 : 0, at: now });
+    this.pushListeners();
+  }
+
+  listenerSummary() {
+    const now = Date.now();
+    const out = { t: 'listeners', n: 0, good: 0, fair: 0, poor: 0, stalled: 0, silent: 0 };
+    for (const [uid, r] of this.quals) {
+      if (now - r.at > 35000) { this.quals.delete(uid); continue; }   // a listener who stopped reporting has left or paused
+      out.n++; out[r.q]++;
+      if (r.s) out.silent++;
+    }
+    return out;
+  }
+
+  // At most one summary every 3 seconds; one that arrives too soon is sent when the gap is over.
+  pushListeners() {
+    const wait = 3000 - (Date.now() - this.qPushed);
+    if (wait > 0) { if (!this.qTimer) this.qTimer = setTimeout(() => { this.qTimer = null; this.pushListeners(); }, wait); return; }
+    this.qPushed = Date.now();
+    this.toHost(this.listenerSummary());
   }
 
   // A person's first arrival during the live is shown to the host once. Rejoining adds nothing here.
@@ -497,6 +533,10 @@ export class LiveRoom {
       return;
     }
 
+    // How the audio is arriving for this listener (the page measures it every few seconds). Only the host console
+    // ever sees the summary: how many listen and how many are fine, never who.
+    if (m.t === 'qual') { this.noteQuality(att, m); return; }
+
     // A person shared the live (the share sheet finished or the link was copied). Only the host console hears about it.
     if (m.t === 'share') {
       if (att.owner || s.status !== 'live' || !this.shareAllow(att.uid)) return;
@@ -715,6 +755,7 @@ export class LiveRoom {
   async gone(ws) {
     const att = ws.deserializeAttachment();
     try { ws.close(1000, 'bye'); } catch { /* already closed */ }
+    if (att?.uid && this.quals.delete(att.uid)) this.pushListeners();
     if (att?.live && this.st.status === 'live') {
       const still = this.ctx.getWebSockets().some((w) => w !== ws && w.deserializeAttachment()?.live);
       if (!still) { this.st.broadcaster.online = false; await this.save(); this.pushState(); }

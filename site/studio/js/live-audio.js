@@ -25,16 +25,24 @@ export class LiveAudio {
     this.src = null;
     this.stream = null;     // the mixed stream: this is what is sent and recorded
     this.onLost = null;     // called when the chosen input disappears (unplugged, driver reset)
+    this.onMute = null;     // called with true/false when the input goes silent at the device (a stuck USB driver) or comes back
+    this.onCtxState = null; // called when the browser's audio engine is suspended or running again
+    this.activeId = '';     // the device id actually in use (it can change when a USB device is plugged back in)
+    this.label = '';
     this.monitoring = false;
   }
 
   get track() { return this.stream?.getAudioTracks()[0] || null; }
+  get inputTrack() { return this.mic?.getAudioTracks()[0] || null; }
+  // The soundcard stopped delivering sound but the browser still lists the input as alive.
+  get inputMuted() { const t = this.inputTrack; return !!t && (t.muted || t.readyState !== 'live'); }
 
   async start({ deviceId = '', gain = 1 } = {}) {
     let ctx;
     try { ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 }); }
     catch { ctx = new AudioContext({ latencyHint: 'interactive' }); }
     this.ctx = ctx;
+    ctx.onstatechange = () => { this.onCtxState?.(ctx.state); };
     this.dest = ctx.createMediaStreamDestination();
     this.dest.channelCount = 2;
     this.gainNode = ctx.createGain();
@@ -54,21 +62,51 @@ export class LiveAudio {
     return label;
   }
 
+  // Wakes the browser's audio engine if it was suspended (a USB glitch, a sleeping tab). Safe to call any time.
+  async wake() {
+    try { if (this.ctx && this.ctx.state !== 'running' && this.ctx.state !== 'closed') await this.ctx.resume(); } catch { /* still asleep */ }
+    return this.ctx?.state || 'closed';
+  }
+
   // Raw on purpose: no echo cancelling, noise suppression or auto-gain. A soundcard mix must stay as you made it.
   // Switching input swaps only the source, so the stream (and the live and the recording) carries on.
-  async useDevice(deviceId = '') {
-    const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 } };
-    if (deviceId) audio.deviceId = { exact: deviceId };
-    const mic = await navigator.mediaDevices.getUserMedia({ audio });
+  // Opening the same input again (or { reopen: true }) lets go of the old, possibly stuck, handle FIRST: some USB
+  // drivers hand back silence while the old handle is still open. If the soundcard comes back under a new id,
+  // the input with the same name is used.
+  async useDevice(deviceId = '', { reopen = false } = {}) {
+    const base = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 } };
+    const ask = (id) => navigator.mediaDevices.getUserMedia({ audio: id ? { ...base, deviceId: { exact: id } } : base });
+    const release = () => {
+      try { this.src?.disconnect(); } catch { /* already apart */ }
+      this.mic?.getTracks().forEach((t) => { t.onended = null; t.onmute = null; t.onunmute = null; t.stop(); });
+      this.src = null; this.mic = null;
+    };
     const old = { src: this.src, mic: this.mic };
+    const same = !deviceId || deviceId === this.activeId;
+    const releaseFirst = reopen || same;
+    if (releaseFirst) release();
+    let mic;
+    try { mic = await ask(deviceId); }
+    catch (e) {
+      if (deviceId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError') && this.label) {
+        const alt = (await listInputs().catch(() => [])).find((d) => d.label === this.label && d.id !== deviceId);
+        if (alt) mic = await ask(alt.id); else throw e;
+      } else throw e;
+    }
     this.mic = mic;
     this.src = this.ctx.createMediaStreamSource(mic);
     this.src.connect(this.gainNode);
-    if (old.src) old.src.disconnect();
-    if (old.mic) old.mic.getTracks().forEach((t) => { t.onended = null; t.stop(); });
+    if (!releaseFirst) {
+      if (old.src) old.src.disconnect();
+      if (old.mic) old.mic.getTracks().forEach((t) => { t.onended = null; t.onmute = null; t.onunmute = null; t.stop(); });
+    }
     const t = mic.getAudioTracks()[0];
     t.onended = () => this.onLost?.();
-    return t.label || 'Input';
+    t.onmute = () => this.onMute?.(true);
+    t.onunmute = () => this.onMute?.(false);
+    this.activeId = t.getSettings?.().deviceId || deviceId || '';
+    this.label = t.label || this.label || 'Input';
+    return this.label;
   }
 
   setGain(v) { if (this.gainNode) this.gainNode.gain.value = v; }
@@ -91,7 +129,8 @@ export class LiveAudio {
 
   async stop() {
     this.onLost = null;
-    this.mic?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
+    this.onMute = null; this.onCtxState = null;
+    this.mic?.getTracks().forEach((t) => { t.onended = null; t.onmute = null; t.onunmute = null; t.stop(); });
     try { this.src?.disconnect(); } catch { /* ignore */ }
     try { await this.ctx?.close(); } catch { /* ignore */ }
     this.ctx = this.mic = this.src = this.stream = null;

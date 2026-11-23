@@ -199,7 +199,7 @@ async function main() {
         audio.srcObject = st; audio.muted = S.muted; startMeter(st);
         Promise.resolve(audio.play()).then(() => { S.blocked = false; paint(); }).catch(() => { S.blocked = true; paint(); });  // the browser may need one tap
       } });
-      S.stopQ = watchQuality(S.pull.pc, (q) => { S.q = q; paintQ(); });
+      S.stopQ = watchQuality(S.pull.pc, (q) => { S.q = q; paintQ(); reportQ(q); });
       S.pull.pc.addEventListener('connectionstatechange', () => { if (['failed', 'disconnected'].includes(S.pull?.pc.connectionState)) setTimeout(() => { if (S.listening && S.pull?.pc.connectionState !== 'connected') relisten(); }, 3000); });
     } catch (e) {
       S.listening = false; S.failedAt = Date.now();
@@ -207,7 +207,18 @@ async function main() {
     }
     paint();
   }
-  function stopListen() { stopMeter(); S.blocked = false; S.stopQ?.(); S.stopQ = null; try { S.pull?.close(); } catch { /* closed */ } S.pull = null; audio.srcObject = null; S.listening = false; S.q = null; }
+  // Tell the room how the audio is arriving (the host's console sums it up, without names): at once when it changes,
+  // otherwise about every 10 seconds. "silent" means the sound has been flat zero for three readings in a row.
+  let lastQ = ''; let lastQAt = 0; let flat = 0;
+  function reportQ(q) {
+    flat = q.level != null && q.level < 0.002 ? flat + 1 : 0;
+    const silent = flat >= 3 ? 1 : 0;
+    const key = q.quality + silent;
+    if (key === lastQ && Date.now() - lastQAt < 10000) return;
+    lastQ = key; lastQAt = Date.now();
+    room.send({ t: 'qual', q: q.quality, s: silent });
+  }
+  function stopListen() { if (S.listening) { try { room.send({ t: 'qual', off: 1 }); } catch { /* the room is gone */ } } lastQ = ''; flat = 0; stopMeter(); S.blocked = false; S.stopQ?.(); S.stopQ = null; try { S.pull?.close(); } catch { /* closed */ } S.pull = null; audio.srcObject = null; S.listening = false; S.q = null; }
   async function relisten() { stopListen(); await listen(true); }
   function onAudioEpoch() {
     const a = S.room?.audio;
