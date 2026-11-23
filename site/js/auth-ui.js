@@ -26,7 +26,7 @@ export const displayName = () => {
   const u = session?.user;
   if (!u) return '';
   if (u.is_anonymous) return `Guest ${u.id.slice(0, 4)}`;
-  return u.user_metadata?.full_name?.split(' ')[0] || (u.email || '').split('@')[0] || 'You';
+  return u.user_metadata?.display_name || u.user_metadata?.full_name?.split(' ')[0] || (u.email || '').split('@')[0] || 'You';
 };
 
 /* ---------- start-up ---------- */
@@ -234,24 +234,41 @@ function passwordDialog(title) {
   dlg.showModal();
 }
 
-/* ---------- header chip ---------- */
-function openAccount() {
-  const close = h('button', { class: 'btn link', onclick: () => dlg.close() }, 'Close');
-  const dlg = h('dialog', { class: 'sheet' }, h('div', { class: 'sheet-body' },
-    h('h2', {}, 'Your account'),
-    h('p', { class: 'muted' }, session?.user?.email || 'Signed in with Google'),
-    h('p', { class: 'muted small' }, `Your comments show as ${displayName()}.`),
-    h('button', { class: 'btn', onclick: async () => { await sbp.auth.signOut(); dlg.close(); toast('Signed out.'); } }, 'Sign out'),
-    close));
-  dlg.addEventListener('close', () => dlg.remove());
-  document.body.append(dlg);
-  dlg.showModal();
+/* ---------- profile page ---------- */
+// Changes the name shown on comments and in the header. The database renames old comments too.
+export async function updateDisplayName(name) {
+  const { data, error } = await sbp.rpc('set_display_name', { p_name: name });
+  if (error) throw error;
+  const { error: e2 } = await sbp.auth.updateUser({ data: { display_name: data } });
+  if (e2) throw e2;
+  return data;
 }
 
-export function mountAccountChip(el) {
-  const paint = () => { el.textContent = isMember() ? displayName() : 'Sign in'; };
+export async function signOutNow() {
+  await sbp.auth.signOut();
+}
+
+// Removes the account and everything the person wrote, then ends the session on this device.
+export async function deleteMyAccount() {
+  const { error } = await sbp.rpc('delete_my_account');
+  if (error) throw error;
+  await sbp.auth.signOut({ scope: 'local' }).catch(() => {});
+}
+
+export const signInMethod = () => {
+  const ids = session?.user?.identities || [];
+  return ids.some((i) => i.provider === 'google') ? 'Google' : 'Email and password';
+};
+
+/* ---------- header chip ---------- */
+// A signed-in person's name opens /profile/. Pass { newTab: true } where leaving the page would be rude (the live room).
+export function mountAccountChip(el, { newTab = false } = {}) {
+  const paint = () => {
+    el.textContent = isMember() ? displayName() : 'Sign in';
+    el.setAttribute('aria-label', isMember() ? `Your profile, ${displayName()}` : 'Sign in');
+  };
   el.addEventListener('click', () => {
-    if (isMember()) openAccount();
+    if (isMember()) { if (newTab) window.open('/profile/', '_blank', 'noopener'); else location.assign('/profile/'); }
     else location.assign('/auth/?next=' + encodeURIComponent(location.pathname + location.search));
   });
   onAuth(paint);

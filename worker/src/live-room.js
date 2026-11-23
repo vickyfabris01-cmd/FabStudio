@@ -156,7 +156,7 @@ export class LiveRoom {
     const name = owner
       ? this.st.settings.hostName
       : anon ? `Guest ${user.id.slice(0, 4)}`
-        : clean(user.user_metadata?.full_name?.split(' ')[0] || (user.email || '').split('@')[0] || 'Viewer', 30);
+        : clean(user.user_metadata?.display_name || user.user_metadata?.full_name?.split(' ')[0] || (user.email || '').split('@')[0] || 'Viewer', 30);
     const old = ws.deserializeAttachment() || {};
     const att = { hello: true, at: old.at || Date.now(), uid: user.id, name, anon, owner, console: owner && m.console === true, live: !!old.live };
     ws.serializeAttachment(att);

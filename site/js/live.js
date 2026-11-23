@@ -32,7 +32,7 @@ const ERR = {
 };
 
 async function main() {
-  mountAccountChip(document.getElementById('account'));
+  mountAccountChip(document.getElementById('account'), { newTab: true });
   await initAuth({ guest: true });
   let row = null;
   try { row = id ? await data.getLive(id) : null; } catch (e) { root.replaceChildren(h('p', { class: 'empty' }, 'Could not load this live. ' + data.friendly(e))); return; }

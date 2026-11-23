@@ -238,3 +238,12 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 .album-card::before { content: ''; position: absolute; top: 0; left: 9%; right: 9%; height: 12px; background: #3a3548; border-radius: 10px 10px 0 0; opacity: .75; }
 .album-card::after { content: ''; position: absolute; top: 6px; left: 4.5%; right: 4.5%; height: 12px; background: #4a4560; border-radius: 10px 10px 0 0; opacity: .9; }
 .album-card .pcard { position: relative; z-index: 1; }
+
+/* ---------- profile page ---------- */
+.profile #nameform { margin-top: 1.4rem; }
+.profile #msg:empty { display: none; }
+.pcard { margin-top: 1.6rem; padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); display: grid; gap: .5rem; }
+.pcard h2 { font-size: 1.1rem; }
+.pcard.danger { border-color: rgba(229,115,106,.45); }
+.danger-btn { color: var(--danger); border-color: rgba(229,115,106,.55); background: transparent; }
+.danger-btn:not(:disabled):hover { background: rgba(229,115,106,.12); }

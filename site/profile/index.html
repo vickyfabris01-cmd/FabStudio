@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14121a">
+  <link rel="icon" type="image/png" href="/img/fabris-poet-favicon.png">
+  <link rel="apple-touch-icon" href="/img/fabris-poet-apple-touch.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="robots" content="noindex">
+  <title>Your profile | Fabris Poet</title>
+  <link rel="stylesheet" href="/css/public.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/"><img class="brand-mark" src="/img/fabris-poet-mark.png" alt="" width="34" height="34"><span>Fabris Poet</span></a>
+    <a class="back" id="back" href="/">Back</a>
+  </header>
+  <main class="wrap auth profile" id="main" hidden>
+    <h1>Your profile</h1>
+    <p class="muted" id="who"></p>
+
+    <form id="nameform" novalidate>
+      <label class="field">Name
+        <input id="name" type="text" maxlength="30" autocomplete="nickname" placeholder="How your name shows on comments">
+      </label>
+      <p id="msg" class="error" role="alert"></p>
+      <button id="save" class="btn primary block" type="submit">Save name</button>
+    </form>
+
+    <section class="pcard">
+      <h2>Sign out</h2>
+      <p class="muted small">You can sign back in any time.</p>
+      <button id="out" class="btn block" type="button">Sign out</button>
+    </section>
+
+    <section class="pcard danger">
+      <h2>Delete account</h2>
+      <p class="muted small">This removes your account, your comments, reactions and views. It cannot be undone.</p>
+      <button id="del" class="btn block danger-btn" type="button">Delete my account</button>
+    </section>
+  </main>
+  <footer class="foot"><span>FabisPot</span><a href="/policies/">Rights and policies</a></footer>
+  <noscript><p class="wrap">This page needs JavaScript.</p></noscript>
+  <script src="/shared/vendor/supabase.js"></script>
+  <script type="module" src="/js/profile-page.js"></script>
+</body>
+</html>
