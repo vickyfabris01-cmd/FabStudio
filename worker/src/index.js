@@ -11,7 +11,7 @@ export { LiveRoom };
 
 // <folder>/<id>.<ext>, plus an item's second version (items/<id>.alt.<ext>) and screen background (thumbs/<id>.bg.<ext>)
 const KEY_RE = /^(captures|tunes|bakes|items|thumbs)\/[0-9a-f-]{36}(\.(alt|bg))?\.[a-z0-9]{2,5}$/;
-const PUB_RE = /^(pub\/[0-9a-f-]{36}\/(media|thumb|alt|bg)\.[a-z0-9]{2,5}|hero\/[1-7]-[0-9]{10,14}\.jpg)$/;   // posts, and the home page hero pictures
+const PUB_RE = /^(pub\/[0-9a-f-]{36}\/(media|alt|bg|thumb(-[0-9]{10,14})?)\.[a-z0-9]{2,5}|hero\/[1-7]-[0-9]{10,14}\.jpg)$/;   // posts, and the home page hero pictures
 const UUID_RE = /^[0-9a-f-]{36}$/;
 const MAX_PART = 10 * 1024 * 1024; // client sends 8 MB parts; allow headroom
 
@@ -312,7 +312,7 @@ export default {
         const thumbKey = keyFrom(b.thumbKey);
         if (!mediaKey.startsWith(`items/${id}.`) || !thumbKey.startsWith(`thumbs/${id}.`)) throw new HttpError(400, 'Keys do not match item');
         const publicMediaKey = `pub/${id}/media.${extOf(mediaKey)}`;
-        const publicThumbKey = `pub/${id}/thumb.${extOf(thumbKey)}`;
+        const publicThumbKey = `pub/${id}/thumb-${Date.now()}.${extOf(thumbKey)}`;
         const pairs = [[mediaKey, publicMediaKey], [thumbKey, publicThumbKey]];
         const out = { publicMediaKey, publicThumbKey };
         // The second version (an audio item's video, a video item's audio) and the animated screen's background picture.
@@ -346,10 +346,10 @@ export default {
         if (b.thumbKey) {
           const from = keyFrom(b.thumbKey);
           if (!from.startsWith(`thumbs/${id}.`)) throw new HttpError(400, 'Thumbnail does not match item');
-          out.publicThumbKey = `pub/${id}/thumb.${extOf(from)}`;
+          out.publicThumbKey = `pub/${id}/thumb-${Date.now()}.${extOf(from)}`;
           const obj = await bucket.get(from);
           if (!obj) throw new HttpError(404, 'Thumbnail not uploaded yet');
-          await deleteByPrefix(env.PUBLIC_BUCKET, `pub/${id}/thumb.`);
+          await deleteByPrefix(env.PUBLIC_BUCKET, `pub/${id}/thumb`);
           await env.PUBLIC_BUCKET.put(out.publicThumbKey, obj.body, { httpMetadata: obj.httpMetadata });
         }
         if (b.recordingKey) {
