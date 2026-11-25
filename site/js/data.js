@@ -10,7 +10,14 @@ async function must(q) {
   return data;
 }
 
-export const listItems = () => must(sbp.from('items_public').select('*').not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(120));
+// A post has a file of its own, or it plays from YouTube (youtube_id, migration 012). Before that migration the
+// second kind does not exist, so each list falls back to the old filter.
+const HAS_MEDIA = 'public_media_key.not.is.null,youtube_id.not.is.null';
+async function withYouTube(build) {
+  try { return await must(build((q) => q.or(HAS_MEDIA))); }
+  catch { return await must(build((q) => q.not('public_media_key', 'is', null))); }
+}
+export const listItems = () => withYouTube((media) => media(sbp.from('items_public').select('*')).order('published_at', { ascending: false }).limit(120));
 
 // The pictures for the home page hero (slot 1 to 7). Empty when none were uploaded or migration 008 is not run yet.
 export const listHero = async () => { try { return await must(sbp.from('hero_images').select('slot,key,updated_at').order('slot')); } catch { return []; } };
@@ -19,15 +26,15 @@ export const albumParts = (liveId) => must(sbp.from('items_public').select('id,t
 export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id', id).maybeSingle());
 // The latest poems other than this one, for "More from Fabris".
 export const listMore = (excludeId) =>
-  must(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId).not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(4));
+  withYouTube((media) => media(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId)).order('published_at', { ascending: false }).limit(4));
 // Four random regular posts for "More from Fabris" on a live that has ended. Posts made from a live recap and
 // live replays are left out. Picked fresh on every visit. (Before migration 007 there is no source_live_id column
 // and so no recap posts to leave out, which is why the second try drops that filter.)
 export async function listRandomPosts(excludeId, n = 4) {
-  const base = () => sbp.from('items_public').select('id,title,public_thumb_key,n_views,n_like,n_comments').neq('id', excludeId).neq('kind', 'live')
-    .not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(200);
+  const base = (media) => media(sbp.from('items_public').select('id,title,public_thumb_key,n_views,n_like,n_comments').neq('id', excludeId).neq('kind', 'live'))
+    .order('published_at', { ascending: false }).limit(200);
   let rows;
-  try { rows = await must(base().is('source_live_id', null)); } catch { rows = await must(base()); }
+  try { rows = await withYouTube((media) => base(media).is('source_live_id', null)); } catch { rows = await withYouTube((media) => base(media)); }
   rows = [...(rows || [])];
   for (let i = rows.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rows[i], rows[j]] = [rows[j], rows[i]]; }
   return rows.slice(0, n);

@@ -1,0 +1,10 @@
+# YouTube (docs/YOUTUBE-UPDATE.md). Nothing to add to wrangler.toml itself.
+#
+# Set two secrets (never put them in a file), then redeploy:
+#   npx wrangler secret put YT_CLIENT_ID        <- Google Cloud > Credentials > OAuth client ID
+#   npx wrangler secret put YT_CLIENT_SECRET    <- the client secret next to it
+#   npx wrangler deploy
+#
+# SUPABASE_SERVICE_KEY must already be set (live chat and guest merging use it); YouTube uses it to keep the
+# connection in the youtube_link table. The redirect URI to register in Google Cloud is
+#   <your Worker address>/youtube/callback

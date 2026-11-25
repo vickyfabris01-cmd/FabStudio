@@ -1,0 +1,1036 @@
+diff --git a/site/js/data.js b/site/js/data.js
+index 8567f9a..13ca006 100644
+--- a/site/js/data.js
++++ b/site/js/data.js
+@@ -10,7 +10,14 @@ async function must(q) {
+   return data;
+ }
+ 
+-export const listItems = () => must(sbp.from('items_public').select('*').not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(120));
++// A post has a file of its own, or it plays from YouTube (youtube_id, migration 012). Before that migration the
++// second kind does not exist, so each list falls back to the old filter.
++const HAS_MEDIA = 'public_media_key.not.is.null,youtube_id.not.is.null';
++async function withYouTube(build) {
++  try { return await must(build((q) => q.or(HAS_MEDIA))); }
++  catch { return await must(build((q) => q.not('public_media_key', 'is', null))); }
++}
++export const listItems = () => withYouTube((media) => media(sbp.from('items_public').select('*')).order('published_at', { ascending: false }).limit(120));
+ 
+ // The pictures for the home page hero (slot 1 to 7). Empty when none were uploaded or migration 008 is not run yet.
+ export const listHero = async () => { try { return await must(sbp.from('hero_images').select('slot,key,updated_at').order('slot')); } catch { return []; } };
+@@ -19,15 +26,15 @@ export const albumParts = (liveId) => must(sbp.from('items_public').select('id,t
+ export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id', id).maybeSingle());
+ // The latest poems other than this one, for "More from Fabris".
+ export const listMore = (excludeId) =>
+-  must(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId).not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(4));
++  withYouTube((media) => media(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId)).order('published_at', { ascending: false }).limit(4));
+ // Four random regular posts for "More from Fabris" on a live that has ended. Posts made from a live recap and
+ // live replays are left out. Picked fresh on every visit. (Before migration 007 there is no source_live_id column
+ // and so no recap posts to leave out, which is why the second try drops that filter.)
+ export async function listRandomPosts(excludeId, n = 4) {
+-  const base = () => sbp.from('items_public').select('id,title,public_thumb_key,n_views,n_like,n_comments').neq('id', excludeId).neq('kind', 'live')
+-    .not('public_media_key', 'is', null).order('published_at', { ascending: false }).limit(200);
++  const base = (media) => media(sbp.from('items_public').select('id,title,public_thumb_key,n_views,n_like,n_comments').neq('id', excludeId).neq('kind', 'live'))
++    .order('published_at', { ascending: false }).limit(200);
+   let rows;
+-  try { rows = await must(base().is('source_live_id', null)); } catch { rows = await must(base()); }
++  try { rows = await withYouTube((media) => base(media).is('source_live_id', null)); } catch { rows = await withYouTube((media) => base(media)); }
+   rows = [...(rows || [])];
+   for (let i = rows.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rows[i], rows[j]] = [rows[j], rows[i]]; }
+   return rows.slice(0, n);
+diff --git a/site/js/live.js b/site/js/live.js
+index 3e4f347..1c3cc68 100644
+--- a/site/js/live.js
++++ b/site/js/live.js
+@@ -5,6 +5,7 @@ import { connectRoom } from '../shared/live-socket.js';
+ import { pullAudio, watchQuality } from '../shared/sfu.js';
+ import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, isMember } from './auth-ui.js';
+ import * as data from './data.js';
++import { liveVideo } from './youtube-embed.js';
+ 
+ const svg = (d) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return s.firstChild; };
+ const LOVE = '<path d="M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572"/>';
+@@ -100,6 +101,8 @@ async function main() {
+   const stageImg = row.public_thumb_key ? h('img', { src: data.mediaUrl(row.public_thumb_key), alt: '' }) : null;
+   const over = h('div', { class: 'l-over' });
+   const stage = h('div', { class: 'l-stage' }, stageImg, h('div', { class: 'l-stagebody' }, cardTop, over));
++  // The optional YouTube video. Opening it pauses this page's audio (so nothing plays twice); closing it lets the audio start again.
++  const yt = liveVideo({ stage, onOpen: () => { S.stopped = true; stopListen(); paint(); }, onClose: () => { S.stopped = false; paint(); } });
+   const audio = h('audio', { autoplay: true, playsinline: true });
+   audio.hidden = true;
+   const note = h('div', { class: 'l-note', hidden: true });
+@@ -115,7 +118,7 @@ async function main() {
+   const reqList = h('div', { class: 'l-menulist' });
+   const reqOther = h('button', { type: 'button', role: 'option', class: 'other', onclick: () => { S.reqMode = true; S.menu = false; paint(); chatIn.focus(); } }, 'Other poem…');
+   const reqMenu = h('div', { class: 'l-menu', role: 'listbox', hidden: true }, reqList, reqOther);
+-  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, shareBtn, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
++  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, shareBtn, yt.btn, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
+ 
+   const feed = h('div', { class: 'l-feed', role: 'log', 'aria-live': 'polite' });
+ 
+@@ -148,7 +151,7 @@ async function main() {
+   const bubbles = h('div', { class: 'l-bubbles', 'aria-hidden': 'true' });
+   const dock = h('div', { class: 'l-dock', hidden: true }, bubbles, h('div', { class: 'l-dockin' }, loveBtn, h('div', { class: 'l-box' }, modeChip, chatIn), sendBtn));
+ 
+-  root.replaceChildren(stage, audio, before, pills, gate, note, feed, moreBox);
++  root.replaceChildren(stage, yt.box, audio, before, pills, gate, note, feed, moreBox);
+   document.body.append(dock);
+ 
+   const els = { q: h('div', { class: 'l-q-ind' }) };
+@@ -398,6 +401,8 @@ async function main() {
+     // listening starts by itself when the audio is on, unless the person stopped it (a failed try waits a few seconds)
+     if (live && audioOn && !blocked && !S.listening && !S.stopped && Date.now() - S.failedAt > 5000) listen(true);
+ 
++    yt.paint({ live, blocked, settings, title: S.room?.title || S.row.title });
++
+     // pills
+     const showPills = live && !blocked;
+     pills.hidden = !showPills;
+diff --git a/site/js/poem.js b/site/js/poem.js
+index f80d849..b3c21a8 100644
+--- a/site/js/poem.js
++++ b/site/js/poem.js
+@@ -6,6 +6,7 @@ import * as data from './data.js';
+ import { maybeInvite } from './invite.js';
+ import { downloadName, extOf } from '../shared/dl-name.js';
+ import { drawScene, SCENE_W, SCENE_H } from '../shared/scene.js';
++import { youtubePlayer } from './youtube-embed.js';
+ 
+ const svg = (inner, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="${cls}">${inner}</svg>`;
+ const ICON = {
+@@ -217,7 +218,7 @@ async function main() {
+   const prevPart = () => (parts.length ? parts[(partIx - 1 + parts.length) % parts.length] : null);
+   const goPart = (x) => { if (!x) return; if (x.id === id) { const m = player.media(); m.currentTime = 0; m.play().catch(() => {}); } else location.assign(`/poem/?id=${x.id}&play=1`); };
+ 
+-  const player = buildPlayer();
++  const player = item.youtube_id ? youtubePlayer(item, { thumbUrl: thumb, isMember, requireAuth }) : buildPlayer();   // a post from YouTube plays in YouTube's player
+   function buildPlayer() {
+     const both = !!(audioUrl && videoUrl);
+     const KEY = 'fp.mode';
+@@ -441,7 +442,7 @@ async function main() {
+     document.addEventListener('keydown', onKey);
+     document.body.append(wrap);
+   }
+-  const dlBtn = item.allow_download === false ? null
++  const dlBtn = item.allow_download === false || item.youtube_id ? null
+     : h('button', { class: 'react dl', type: 'button', 'aria-label': 'Download', title: 'Download', onclick: openDownload }, icon('download'));
+ 
+   const titleText = h('h1', {}, item.title);
+diff --git a/site/js/youtube-embed.js b/site/js/youtube-embed.js
+new file mode 100644
+index 0000000..d88cc77
+--- /dev/null
++++ b/site/js/youtube-embed.js
+@@ -0,0 +1,98 @@
++// YouTube on the public site. Two small pieces, both opt-in for the viewer:
++//   liveVideo()     the "Watch video" button and player on the live page. It only exists while the host has switched
++//                   the video on, and the YouTube player is not loaded until a viewer taps. The audio code of the live
++//                   page is not changed: opening the video just uses the page's own pause, closing it lets it resume.
++//   youtubePlayer() the player of a post that comes from YouTube (the post page).
++import { h } from '../shared/dom.js';
++import { isYouTubeId } from '../shared/youtube-id.js';
++
++const CSS = `
++.l-video{margin:.5rem 0 0}
++.l-video[hidden]{display:none}
++.l-frame{position:relative;width:min(100%,calc(38dvh * 16 / 9));aspect-ratio:16/9;margin:0 auto;background:#000;border-radius:12px;overflow:hidden;border:1px solid var(--line)}
++.l-frame iframe,.yt-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
++.l-vbar{display:flex;align-items:center;gap:.6rem;margin-top:.4rem}
++.l-vbar .l-meta{flex:1;font-size:.82rem}
++.l-stage.video-on .l-over,.l-stage.video-on .l-ctl,.l-stage.video-on>img{display:none}
++.l-stage.video-on{min-height:0}
++.l-stage.video-on .l-stagebody{padding-bottom:.5rem}
++.yt-wrap{margin-top:.8rem}
++.yt-frame{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden}
++.yt-facade{display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:0;border:0;cursor:pointer;background:#000 center/cover no-repeat;color:#fff}
++.yt-facade .yt-go{width:68px;height:68px;border-radius:50%;background:rgba(20,18,26,.72);border:2px solid rgba(255,255,255,.85);display:flex;align-items:center;justify-content:center}
++.yt-facade svg{width:30px;height:30px;fill:currentColor}
++.yt-note{margin:.4rem 0 0;font-size:.82rem;color:var(--muted)}
++`;
++const style = document.createElement('style');
++style.textContent = CSS;
++document.head.append(style);
++
++const VIDEO = '<path d="M15 10l4.553 -2.276a1 1 0 0 1 1.447 .894v6.764a1 1 0 0 1 -1.447 .894l-4.553 -2.276v-4z"/><path d="M3 6m0 2a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2z"/>';
++const PLAY = '<path d="M7 4v16l13 -8z"/>';
++const icon = (d) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return s.firstChild; };
++
++const embedUrl = (id) => `https://www.youtube.com/embed/${id}?${new URLSearchParams({ autoplay: '1', playsinline: '1', rel: '0', modestbranding: '1' })}`;
++const frame = (id, title) => h('iframe', {
++  src: embedUrl(id), title, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: true,
++  referrerpolicy: 'strict-origin-when-cross-origin',
++});
++
++/* ---------- the live page ---------- */
++// stage: the live card (it is tidied while the video plays). onOpen / onClose: what the page does with its own audio.
++export function liveVideo({ stage, onOpen, onClose }) {
++  const btn = h('button', { class: 'l-pill', type: 'button', hidden: true, title: 'Video uses much more data than audio' }, icon(VIDEO), h('span', {}, 'Watch video'));
++  const bar = h('div', { class: 'l-vbar' }, h('span', { class: 'l-meta' }, 'Video uses much more data than audio.'), h('button', { class: 'l-link', type: 'button' }, 'Back to audio only'));
++  const box = h('div', { class: 'l-video', hidden: true });
++  let open = false; let shownId = '';
++
++  const close = (notify = true) => {
++    if (!open) return;
++    open = false; shownId = '';
++    box.replaceChildren(); box.hidden = true;
++    stage?.classList.remove('video-on');
++    if (notify) onClose?.();
++  };
++  const show = (id, title) => {
++    open = true; shownId = id;
++    box.replaceChildren(h('div', { class: 'l-frame' }, frame(id, title)), bar);
++    box.hidden = false;
++    stage?.classList.add('video-on');
++  };
++  btn.onclick = () => {
++    const id = btn.dataset.id;
++    if (!isYouTubeId(id)) return;
++    if (navigator.connection?.saveData && !confirm('Data saver is on, and video uses a lot of data. Watch anyway?')) return;
++    onOpen?.();
++    show(id, btn.dataset.title || 'Live video');
++  };
++  bar.querySelector('button').onclick = () => close();
++
++  // Called with every repaint of the page (once a second): cheap, and only touches the player when something changed.
++  const paint = ({ live, blocked, settings, title }) => {
++    const id = settings?.ytShow && isYouTubeId(settings?.ytVideoId) ? settings.ytVideoId : '';
++    const available = !!id && !!live && !blocked;
++    btn.hidden = !available;
++    btn.dataset.id = id; btn.dataset.title = title ? `${title} (video)` : 'Live video';
++    if (open && (!available || id !== shownId)) {
++      close(true);                                   // the host hid the video, or the live ended: back to the audio
++      if (available && id) { /* a new video id: the viewer taps Watch video again */ }
++    }
++  };
++  return { btn, box, paint, close, isOpen: () => open };
++}
++
++/* ---------- a post that comes from YouTube ---------- */
++// item: a row of items_public. isMember / requireAuth: the page's sign-in helpers (playing needs an account, as for any post).
++export function youtubePlayer(item, { thumbUrl = '', isMember, requireAuth }) {
++  const slot = h('div', { class: 'yt-frame' });
++  const start = () => slot.replaceChildren(frame(item.youtube_id, item.title || 'Video'));
++  const go = h('button', { class: 'yt-facade', type: 'button', 'aria-label': `Play ${item.title || 'video'}`, style: thumbUrl ? `background-image:url("${thumbUrl}")` : null },
++    h('span', { class: 'yt-go' }, icon(PLAY)));
++  go.onclick = () => {
++    if (isMember()) return start();
++    requireAuth('watch').then((s) => { if (s) start(); });
++  };
++  slot.append(go);
++  const el = h('div', { class: 'yt-wrap player-wrap' }, slot, h('p', { class: 'yt-note' }, 'Plays from YouTube. Video uses more data than audio.'));
++  return { el, media: () => null, play: () => Promise.resolve() };
++}
+diff --git a/site/shared/live-settings.js b/site/shared/live-settings.js
+index be0ecba..7102ccc 100644
+--- a/site/shared/live-settings.js
++++ b/site/shared/live-settings.js
+@@ -2,6 +2,7 @@
+ // screen) and the public page (only the keys marked public). Plain JavaScript, no browser or Worker APIs.
+ //
+ // To add a setting: add one entry to FIELDS and give it a default. Studio draws it, the Worker validates it.
++import { parseYouTubeId } from './youtube-id.js';
+ 
+ export const FIELDS = [
+   // ---- what viewers see
+@@ -27,6 +28,9 @@ export const FIELDS = [
+   // ---- countdown
+   { key: 'countdownEnabled', group: 'Countdown', type: 'bool', default: true, public: true, label: 'Show a countdown before the start', hint: 'The countdown never starts the live. Only your Go live button does.' },
+   { key: 'countdownMinutes', group: 'Countdown', type: 'int', default: 60, min: 5, max: 1440, unit: 'minutes before', public: true, label: 'Countdown begins' },
++  // ---- YouTube video (optional). The audio live never depends on it.
++  { key: 'ytVideoId', group: 'YouTube video', type: 'ytid', default: '', public: true, label: 'YouTube link or video ID', hint: 'Paste the link of your YouTube live. The Check YouTube live button on the ready card fills this in for you.' },
++  { key: 'ytShow', group: 'YouTube video', type: 'bool', default: false, public: true, label: 'Viewers can watch the video', hint: 'Adds a Watch video button on the live page. Audio stays the default.' },
+   // ---- host
+   { key: 'hostName', group: 'Host', type: 'text', default: 'Fabris', max: 30, label: 'Name shown on your chat messages' },
+ ];
+@@ -47,6 +51,9 @@ export function cleanSettings(input, base = DEFAULT_SETTINGS) {
+     } else if (f.type === 'choice') {
+       const found = f.options.find(([val]) => String(val) === String(v));
+       if (found) out[f.key] = found[0];
++    } else if (f.type === 'ytid') {
++      const id = parseYouTubeId(v);   // '' clears it, null means it was not a YouTube link (the old value stays)
++      if (id !== null) out[f.key] = id;
+     } else if (f.type === 'text') {
+       const s = String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, f.max);
+       out[f.key] = s || f.default;
+@@ -59,5 +66,6 @@ export function cleanSettings(input, base = DEFAULT_SETTINGS) {
+ export function publicSettings(s) {
+   const out = {};
+   for (const f of FIELDS) if (f.public) out[f.key] = s[f.key];
++  if (!out.ytShow) out.ytVideoId = '';   // an unlisted YouTube link stays private until the host shows it
+   return out;
+ }
+\ No newline at end of file
+diff --git a/site/shared/youtube-id.js b/site/shared/youtube-id.js
+new file mode 100644
+index 0000000..a100088
+--- /dev/null
++++ b/site/shared/youtube-id.js
+@@ -0,0 +1,29 @@
++// Reads a YouTube video id out of whatever was pasted: a bare 11-character id, a watch link, a youtu.be link, or a
++// /live/, /embed/, /shorts/ link. Plain JavaScript with no browser or Worker APIs, so the Studio, the public page
++// and the Worker can all use it.
++//   ''    nothing was given (the field is empty)
++//   null  something was given but it is not a YouTube video
++//   'id'  the 11-character video id
++const ID = /^[A-Za-z0-9_-]{11}$/;
++
++export function parseYouTubeId(input) {
++  const s = String(input ?? '').trim();
++  if (!s) return '';
++  if (ID.test(s)) return s;
++  let u;
++  try { u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`); } catch { return null; }
++  const host = u.hostname.toLowerCase().replace(/^(www|m)\./, '');
++  if (host === 'youtu.be') {
++    const id = u.pathname.split('/')[1] || '';
++    return ID.test(id) ? id : null;
++  }
++  if (host === 'youtube.com' || host === 'music.youtube.com' || host === 'youtube-nocookie.com') {
++    const v = u.searchParams.get('v');
++    if (v && ID.test(v)) return v;
++    const m = u.pathname.match(/^\/(?:live|embed|shorts|v)\/([A-Za-z0-9_-]{11})(?:[/?]|$)/);
++    if (m) return m[1];
++  }
++  return null;
++}
++
++export const isYouTubeId = (s) => ID.test(String(s || ''));
+diff --git a/site/studio/js/live.js b/site/studio/js/live.js
+index 2e68106..0fffc5f 100644
+--- a/site/studio/js/live.js
++++ b/site/studio/js/live.js
+@@ -15,6 +15,7 @@ import { chatPane } from './console/chatfeed.js';
+ import { sourceControl } from './console/source.js';
+ import { settingsList, openSettingsModal } from './console/settings-modal.js';
+ import { recapPane } from './console/recap.js';
++import { liveCheckRow } from './youtube.js';
+ import { syncAndWait, syncSoon } from './sync.js';
+ 
+ const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
+@@ -51,7 +52,7 @@ function newLiveModal(nav) {
+   const err = h('p', { class: 'error' });
+   const go = h('button', { class: 'btn primary', type: 'button' });
+   const gear = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Live settings', 'aria-expanded': 'false', title: 'Live settings' }, gearIcon());
+-  const panel = h('div', { hidden: true }, settingsList(chosen, (patch) => Object.assign(chosen, patch), { skip: ['Reactions', 'Host'] }));
++  const panel = h('div', { hidden: true }, settingsList(chosen, (patch) => Object.assign(chosen, patch), { skip: ['Reactions', 'Host', 'YouTube video'] }));
+   gear.onclick = () => { panel.hidden = !panel.hidden; gear.setAttribute('aria-expanded', String(!panel.hidden)); };
+   const setMode = (m) => {
+     mode = m;
+@@ -241,6 +242,10 @@ export async function liveConsoleView(itemId, nav) {
+     h('div', { class: 'row c-sched-l' }, h('div', { class: 'grow' }, linkIn), h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(itemId) }, 'Copy')),
+     laptop ? go : null);
+ 
++  /* ----- YouTube video: the Check YouTube live button, on the ready card (before the live is on air) ----- */
++  const yt = liveCheckRow({ settings: () => engine.s.row.settings, save: (patch) => engine.saveSettings(patch) });
++  const ytCard = h('section', { class: 'card c-yt' }, yt.el);
++
+   /* ----- sound strip: level, gain, volume, input, output, show title ----- */
+   const sel = h('select', { 'aria-label': 'Audio input' });
+   const outSel = h('select', { 'aria-label': 'Audio output' });
+@@ -301,7 +306,7 @@ export async function liveConsoleView(itemId, nav) {
+     recapBusy = false;
+   };
+ 
+-  root.append(header.el, sched, sound, h('div', { class: 'c-split' }, reading.el, afterBox, chat.el));
++  root.append(header.el, sched, ytCard, sound, h('div', { class: 'c-split' }, reading.el, afterBox, chat.el));
+ 
+   const paint = () => {
+     const st = s();
+@@ -312,6 +317,8 @@ export async function liveConsoleView(itemId, nav) {
+     stats.el.hidden = pre || ended;   // the recap has its own saved numbers
+     stats.paint();
+     sched.hidden = !pre;
++    ytCard.hidden = !pre;
++    if (pre) yt.paint();
+     if (pre) {
+       const at = st.row.starts_at;
+       when.textContent = at ? `Planned start ${new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'No start time set. Press Go live whenever you are ready.';
+diff --git a/site/studio/js/publish.js b/site/studio/js/publish.js
+index a9257e8..5e63b7b 100644
+--- a/site/studio/js/publish.js
++++ b/site/studio/js/publish.js
+@@ -13,6 +13,7 @@ import { downloadName, extOf } from '../../shared/dl-name.js';
+ import { extractAudio } from './mp4-audio.js';
+ import { scenePanel, videoMaker } from './scene-panel.js';
+ import { toM4a } from './audio-encode.js';
++import { youtubeButton, publicUrl } from './youtube.js';
+ import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
+ 
+ // One place to change the upload limits.
+@@ -308,7 +309,7 @@ function statsEl(c) {
+ }
+ 
+ const statusText = (r) => (r.status === 'published'
+-  ? `Published · ${fmtAgo(r.publishedAt || r.updatedAt)}`
++  ? `${r.youtubeId ? 'From YouTube · ' : ''}Published · ${fmtAgo(r.publishedAt || r.updatedAt)}`
+   : `${STATUS[r.status] || r.status} · edited ${fmtAgo(r.updatedAt)}${r.dirty ? ' · waiting to sync' : ''}`);
+ 
+ /* ---------- list (the Studio tab) ---------- */
+@@ -342,10 +343,13 @@ export async function publishListView(nav) {
+       onclick: (e) => {
+         e.stopPropagation();
+         popMenu(dots, [
+-          { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
+-          { label: 'Open', onclick: () => nav.open(r.id) },
+-          { label: 'Download', onclick: () => act(() => downloadItem(r.id)) },
+-          ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, { label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }] : []),
++          // a post that plays from YouTube has no file of its own: it opens its public page, and leaves the site with Delete
++          ...(r.youtubeId ? [{ label: 'Open page', onclick: () => window.open(`/poem/?id=${r.id}`, '_blank') }] : [
++            { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
++            { label: 'Open', onclick: () => nav.open(r.id) },
++            { label: 'Download', onclick: () => act(() => downloadItem(r.id)) },
++          ]),
++          ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, ...(r.youtubeId ? [] : [{ label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }])] : []),
+           { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
+         ]);
+       },
+@@ -354,7 +358,8 @@ export async function publishListView(nav) {
+   };
+ 
+   const rowEl = (r) => {
+-    const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' })) : h('div', { class: 'thumb ph' });
++    const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' }))
++      : r.youtubeId && r.publicThumbKey ? h('img', { class: 'thumb', alt: '', src: publicUrl(r.publicThumbKey) }) : h('div', { class: 'thumb ph' });
+     const job = isBusy(r.id) ? jobFor(r.id) : null;
+     const failed = jobFor(r.id)?.state === 'error';
+     const line = h('div', { class: (failed ? 'sub error' : 'sub') + (r.status === 'published' && !failed ? ' ok' : '') },
+@@ -388,7 +393,7 @@ export async function publishListView(nav) {
+     }
+     const box = picked.on ? tickBox(picked.ids.has(r.id)) : null;
+     const li = h('li', { class: 'item' + (picked.on && picked.ids.has(r.id) ? ' picked' : ''), onclick: () => {
+-      if (!picked.on) return nav.open(r.id);
++      if (!picked.on) return r.youtubeId ? window.open(`/poem/?id=${r.id}`, '_blank') : nav.open(r.id);
+       if (picked.ids.has(r.id)) picked.ids.delete(r.id); else picked.ids.add(r.id);
+       box.checked = picked.ids.has(r.id); li.classList.toggle('picked', box.checked); selBar.paint();
+     } }, box, thumb, body, end);
+@@ -422,7 +427,7 @@ export async function publishListView(nav) {
+   const live = h('button', { class: 'iconbtn mic', type: 'button', 'aria-label': 'Go live (coming later)', onclick: () => toast('Going live comes in a later phase.') }, micIcon(22));
+   const el = h('section', { class: 'view' },
+     h('div', { class: 'toolbar' }, h('h2', {}, 'Studio'),
+-      h('div', { class: 'row' }, live, window.matchMedia('(min-width: 900px)').matches ? h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake') : null)),
++      h('div', { class: 'row' }, youtubeButton(() => nav.refresh()), live, window.matchMedia('(min-width: 900px)').matches ? h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake') : null)),
+     filters, selBar.el, list, upload);
+ 
+   if (navigator.onLine && stats.size) {
+diff --git a/site/studio/js/sync.js b/site/studio/js/sync.js
+index 9f18a50..1298f69 100644
+--- a/site/studio/js/sync.js
++++ b/site/studio/js/sync.js
+@@ -14,7 +14,7 @@ const T = {
+   bakes:    { remote: 'bakes',           fields: ['id','poemId','captureId','tuneId','tuneVolume','mime','duration','r2Key','createdAt','updatedAt','deletedAt'] },
+   // sourceLiveId is sent only when it has a value (a post made from a live recap), so every other item keeps working
+   // even before migration 007 has been run.
+-  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'], optional: ['sourceLiveId', 'thumbKind', 'allowDownload', 'altKey', 'publicAltKey', 'altMime', 'scene', 'bgKey', 'publicBgKey', 'lyrics', 'showLyrics', 'albumTitle', 'albumPos'] },
++  items:    { remote: 'published_items', fields: ['id','kind','poemId','title','description','mime','duration','mediaKey','thumbKey','publicMediaKey','publicThumbKey','status','publishedAt','commentsEnabled','reactionsEnabled','createdAt','updatedAt'], optional: ['sourceLiveId', 'thumbKind', 'allowDownload', 'altKey', 'publicAltKey', 'altMime', 'scene', 'bgKey', 'publicBgKey', 'lyrics', 'showLyrics', 'albumTitle', 'albumPos', 'youtubeId'] },
+ };
+ // Files that belong to each row: which field holds the file, its R2 key, and its "still to upload" flag.
+ const FILE = { blob: 'blob', key: 'r2Key', pending: 'blobPending' };
+@@ -45,7 +45,7 @@ const fromRemote = (r, fields, optional = []) => ({
+   ...Object.fromEntries(optional.filter((f) => r[snake(f)] != null || (snake(f) in r && CLEARABLE.includes(f))).map((f) => [f, r[snake(f)] ?? null])),
+ });
+ // Columns added by later migrations (source_live_id, thumb_kind). If one is not there yet, the row is sent without them.
+-const NEW_COLUMN = /source_live_id|thumb_kind|allow_download|alt_key|public_alt_key|alt_mime|scene|bg_key|public_bg_key|lyrics|show_lyrics|album_title|album_pos/;
++const NEW_COLUMN = /source_live_id|thumb_kind|allow_download|alt_key|public_alt_key|alt_mime|scene|bg_key|public_bg_key|lyrics|show_lyrics|album_title|album_pos|youtube_id/;
+ 
+ let running = false;
+ let timer = null;
+diff --git a/site/studio/js/youtube.js b/site/studio/js/youtube.js
+new file mode 100644
+index 0000000..85176d9
+--- /dev/null
++++ b/site/studio/js/youtube.js
+@@ -0,0 +1,196 @@
++// YouTube in FabStudio. Read only, and nothing here touches the audio live.
++//   - youtubeButton / openYouTubeLibrary: your channel's uploads, shown on the Studio page. Publish puts one on
++//     Fabris Poet as a post that plays from YouTube.
++//   - liveCheckRow: the "Check YouTube live" button on the ready card before a live. YouTube is only asked when
++//     the button is pressed (one request), never in the background.
++import { CONFIG } from '../../shared/config.js';
++import { getToken } from './auth.js';
++import { syncAndWait } from './sync.js';
++import { h, toast, openModal, fmtDur } from './ui.js';
++
++/* ---------- talking to the Worker ---------- */
++async function yt(path, { method = 'GET', json } = {}) {
++  if (!navigator.onLine) throw new Error('This needs internet.');
++  const token = await getToken();
++  if (!token) throw new Error('Sign in again in Settings, then try again.');
++  const res = await fetch(CONFIG.API_BASE + path, {
++    method, headers: { Authorization: 'Bearer ' + token, ...(json ? { 'Content-Type': 'application/json' } : {}) }, body: json ? JSON.stringify(json) : undefined,
++  });
++  const data = await res.json().catch(() => ({}));
++  if (!res.ok) { const e = new Error(data.error || `Something went wrong (${res.status}).`); e.status = res.status; throw e; }
++  return data;
++}
++export const ytStatus = () => yt('/youtube/status');
++export const ytLive = () => yt('/youtube/live');
++export const ytVideos = (page) => yt('/youtube/videos' + (page ? `?page=${encodeURIComponent(page)}` : ''));
++export const ytPublish = (videoId) => yt('/youtube/publish', { method: 'POST', json: { videoId } });
++export const ytDisconnect = () => yt('/youtube/disconnect', { method: 'POST' });
++export async function connectYouTube() {
++  try {
++    const { url } = await yt('/youtube/connect', { method: 'POST', json: { return: `${location.origin}/studio/` } });
++    location.href = url;
++  } catch (e) { toast(e.message || 'Could not start the YouTube sign-in.'); }
++}
++export const publicUrl = (key) => (key ? `${CONFIG.API_BASE}/public/${key}` : '');
++
++/* ---------- coming back from Google ---------- */
++(() => {
++  const p = new URLSearchParams(location.search);
++  const flag = p.get('yt');
++  if (!flag) return;
++  p.delete('yt');
++  history.replaceState(null, '', location.pathname + (p.toString() ? `?${p}` : '') + location.hash);
++  const MSG = {
++    connected: 'YouTube is connected.', denied: 'YouTube was not connected: access was not allowed.',
++    nochannel: 'That Google account has no YouTube channel.', error: 'YouTube could not be connected. Try again.',
++  };
++  setTimeout(() => toast(MSG[flag] || MSG.error), 900);
++})();
++
++/* ---------- small styles (kept here so no other file has to change) ---------- */
++const CSS = `
++.yt-row .thumb{width:84px;height:47px}
++.yt-list{max-height:52dvh;overflow:auto}
++.yt-check{display:grid;gap:.5rem}
++.yt-found{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
++.yt-found img{width:84px;height:47px;object-fit:cover;border-radius:6px;background:var(--line);flex:none}
++.yt-found .grow{min-width:0}
++.yt-state{align-items:center;gap:.6rem}
++`;
++const style = document.createElement('style');
++style.textContent = CSS;
++document.head.append(style);
++
++/* ---------- the library (Studio page) ---------- */
++const PRIVACY = { public: 'Public', unlisted: 'Unlisted', private: 'Private' };
++
++export function youtubeButton(onChange) {
++  return h('button', { class: 'btn', type: 'button', onclick: () => openYouTubeLibrary({ onChange }) }, 'YouTube');
++}
++
++export function openYouTubeLibrary({ onChange } = {}) {
++  const body = h('div', { class: 'stack' }, h('p', { class: 'muted' }, 'Loading…'));
++  const done = h('button', { class: 'btn', type: 'button' }, 'Close');
++  const { close, box } = openModal(
++    h('h3', {}, 'YouTube videos'),
++    h('p', { class: 'muted small' }, 'Pick a video from your channel to show on Fabris Poet. It plays from YouTube. Its views, Like and comments are counted on your site, separate from YouTube\'s own numbers.'),
++    body, h('div', { class: 'row', style: 'justify-content:flex-end' }, done));
++  box.classList.add('wide');
++  done.onclick = () => close();
++
++  const rowFor = (v) => {
++    const why = v.itemId ? '' : v.privacy === 'private' ? 'Private on YouTube. Make it Unlisted or Public to add it.'
++      : !v.embeddable ? 'Embedding is off. Turn on "Allow embedding" in YouTube Studio.'
++        : v.live && v.live !== 'none' ? 'This live has not finished yet.' : '';
++    const btn = h('button', { class: 'btn small' + (v.itemId || why ? '' : ' primary'), type: 'button' }, v.itemId ? 'On the site' : 'Publish');
++    btn.disabled = !!v.itemId || !!why;
++    btn.onclick = async () => {
++      btn.disabled = true; btn.textContent = 'Publishing…';
++      try {
++        await ytPublish(v.id);
++        btn.textContent = 'On the site';
++        toast(`Published: ${v.title}`);
++        await syncAndWait().catch(() => {});   // brings the new post into the Studio list
++        onChange?.();
++      } catch (e) { toast(e.message || 'Could not publish.'); btn.disabled = false; btn.textContent = 'Publish'; }
++    };
++    return h('li', { class: 'item yt-row' },
++      h('img', { class: 'thumb', src: v.thumb || null, alt: '', loading: 'lazy' }),
++      h('div', { class: 'grow' }, h('div', { class: 'title' }, v.title || 'Untitled'),
++        h('div', { class: 'sub' }, [v.seconds ? fmtDur(v.seconds) : '', PRIVACY[v.privacy] || v.privacy].filter(Boolean).join(' · ')),
++        why ? h('div', { class: 'sub error' }, why) : null),
++      btn);
++  };
++
++  async function showList(channelTitle) {
++    const list = h('ul', { class: 'list yt-list' });
++    const more = h('button', { class: 'btn', type: 'button', hidden: true }, 'Load more');
++    const note = h('p', { class: 'small muted' });
++    const off = h('button', { class: 'btn small', type: 'button' }, 'Disconnect');
++    off.onclick = async () => {
++      if (!confirm('Disconnect YouTube? Posts already on the site stay as they are.')) return;
++      try { await ytDisconnect(); toast('YouTube disconnected.'); load(); } catch (e) { toast(e.message || 'Could not disconnect.'); }
++    };
++    body.replaceChildren(h('div', { class: 'row' }, h('span', { class: 'grow small muted' }, channelTitle ? `Channel: ${channelTitle}` : ''), off), list, note, more);
++    let next = null; let busy = false;
++    const page = async () => {
++      if (busy) return;
++      busy = true; more.disabled = true; note.className = 'small muted'; note.textContent = 'Loading…';
++      try {
++        const d = await ytVideos(next);
++        next = d.next;
++        for (const v of d.items) list.append(rowFor(v));
++        note.textContent = list.children.length ? '' : 'No uploads found on this channel yet.';
++      } catch (e) { note.className = 'small error'; note.textContent = e.message || 'Could not load your videos.'; }
++      busy = false; more.disabled = false; more.hidden = !next;
++    };
++    more.onclick = page;
++    await page();
++  }
++
++  async function load() {
++    body.replaceChildren(h('p', { class: 'muted' }, 'Loading…'));
++    let st;
++    try { st = await ytStatus(); } catch (e) { body.replaceChildren(h('p', { class: 'error' }, e.message || 'Could not reach the server.')); return; }
++    if (!st.configured) { body.replaceChildren(h('p', { class: 'error' }, 'YouTube is not set up on the Worker yet. Follow docs/YOUTUBE-UPDATE.md, then come back.')); return; }
++    if (!st.connected) {
++      body.replaceChildren(
++        h('p', {}, 'Connect your YouTube channel once. FabStudio gets read access only: it can see your videos and cannot change or delete anything on YouTube.'),
++        h('button', { class: 'btn primary', type: 'button', onclick: connectYouTube }, 'Connect YouTube'));
++      return;
++    }
++    await showList(st.channelTitle);
++  }
++  load();
++}
++
++/* ---------- the "Check YouTube live" row (the ready card, before going live) ---------- */
++// settings(): the live's current settings. save(patch): saves some of them (they reach viewers at once).
++export function liveCheckRow({ settings, save }) {
++  const btn = h('button', { class: 'btn small', type: 'button' }, 'Check YouTube live');
++  const out = h('div', { class: 'yt-check' });
++  const el = h('div', { class: 'yt-check' }, h('div', { class: 'row' }, h('b', {}, 'YouTube video'), h('span', { class: 'grow' }), btn), out);
++  let last = null; let busy = false; let shown = '';
++  const apply = async (patch) => { try { await save(patch); } catch (e) { toast(e.message || 'Could not save.'); } };
++
++  const paint = () => {
++    const s = settings() || {};
++    const k = JSON.stringify([s.ytVideoId, !!s.ytShow, last]);
++    if (k === shown) return;
++    shown = k;
++    const kids = [];
++    if (s.ytVideoId) {
++      kids.push(h('div', { class: 'row yt-state' },
++        h('span', { class: 'grow small' }, s.ytShow ? `Viewers can open the video (youtu.be/${s.ytVideoId}).` : `Video set (youtu.be/${s.ytVideoId}) but hidden from viewers.`),
++        h('button', { class: 'btn small', type: 'button', onclick: () => apply({ ytShow: !s.ytShow }) }, s.ytShow ? 'Hide from viewers' : 'Show to viewers')));
++    }
++    if (last?.error) kids.push(h('p', { class: 'small error' }, last.error));
++    else if (last?.needConnect) kids.push(h('div', { class: 'row yt-state' }, h('span', { class: 'grow small muted' }, 'YouTube is not connected yet.'), h('button', { class: 'btn small primary', type: 'button', onclick: connectYouTube }, 'Connect YouTube')));
++    else if (last?.none) kids.push(h('p', { class: 'small muted' }, 'No live found on your channel yet. Start the stream on your phone, then check again.'));
++    else if (last?.videoId && !(s.ytShow && s.ytVideoId === last.videoId)) {
++      const blocked = !last.embeddable;
++      const show = h('button', { class: 'btn small primary', type: 'button', onclick: () => apply({ ytVideoId: last.videoId, ytShow: true }) }, 'Show on public live page');
++      show.disabled = blocked;
++      kids.push(h('div', { class: 'yt-found' },
++        h('img', { src: last.thumb || null, alt: '' }),
++        h('div', { class: 'grow' }, h('b', {}, last.title || 'Your YouTube live'), h('div', { class: 'small muted' }, `${PRIVACY[last.privacy] || last.privacy} · live now`),
++          blocked ? h('div', { class: 'small error' }, last.privacy === 'private' ? 'This live is Private, so viewers cannot play it here.' : 'Embedding is off for this live. Turn on "Allow embedding" in YouTube Studio.') : null),
++        show));
++    }
++    out.replaceChildren(...kids);
++  };
++
++  btn.onclick = async () => {
++    if (busy) return;
++    busy = true; btn.disabled = true; btn.textContent = 'Checking…';
++    try {
++      const d = await ytLive();
++      last = !d.connected ? { needConnect: true } : d.live ? { ...d.live } : { none: true };
++    } catch (e) { last = { error: e.status === 501 ? 'YouTube is not set up on the Worker yet. See docs/YOUTUBE-UPDATE.md.' : (e.message || 'Could not check YouTube.') }; }
++    btn.textContent = 'Check YouTube live';
++    setTimeout(() => { busy = false; btn.disabled = false; }, 4000);   // a short pause, so a double tap is only one request
++    shown = ''; paint();
++  };
++  paint();
++  return { el, paint };
++}
+diff --git a/site/studio/sw.js b/site/studio/sw.js
+index 9f00ec2..fafb931 100644
+--- a/site/studio/sw.js
++++ b/site/studio/sw.js
+@@ -1,12 +1,12 @@
+ // FabStudio service worker: makes the app open offline.
+ // Files are served from cache instantly and refreshed in the background,
+ // so a new deploy shows up on the second open. Bump CACHE only to force a full reset.
+-const CACHE = 'fabstudio-shell-v16';
++const CACHE = 'fabstudio-shell-v17';
+ const SHELL = [
+   '/studio/', '/studio/index.html', '/studio/manifest.webmanifest', '/studio/css/studio.css',
+   '/studio/js/app.js', '/studio/js/db.js', '/studio/js/ui.js', '/studio/js/auth.js', '/studio/js/api.js',
+   '/studio/js/sync.js', '/studio/js/recorder.js', '/studio/js/mixer.js', '/studio/js/baker.js', '/studio/js/publish.js', '/studio/js/publisher.js', '/studio/js/thumbs.js', '/studio/js/live.js', '/studio/js/live-engine.js', '/studio/js/live-audio.js',
+-  '/studio/js/console/header.js', '/studio/js/console/stats.js', '/studio/js/console/reading.js', '/studio/js/console/myaudio.js', '/studio/js/console/deck.js', '/studio/js/console/source.js', '/studio/js/console/chatfeed.js', '/studio/js/console/settings-modal.js', '/studio/js/console/recap.js', '/studio/js/console/webm-cut.js', '/studio/js/console/playlist.js', '/studio/js/home.js', '/studio/js/performance.js', '/studio/js/stats-data.js', '/studio/js/thumb-picker.js', '/studio/js/select.js', '/shared/live-socket.js', '/shared/sfu.js', '/shared/live-settings.js', '/shared/dl-name.js',
++  '/studio/js/console/header.js', '/studio/js/console/stats.js', '/studio/js/console/reading.js', '/studio/js/console/myaudio.js', '/studio/js/console/deck.js', '/studio/js/console/source.js', '/studio/js/console/chatfeed.js', '/studio/js/console/settings-modal.js', '/studio/js/console/recap.js', '/studio/js/console/webm-cut.js', '/studio/js/console/playlist.js', '/studio/js/home.js', '/studio/js/performance.js', '/studio/js/stats-data.js', '/studio/js/thumb-picker.js', '/studio/js/select.js', '/shared/live-socket.js', '/shared/sfu.js', '/shared/live-settings.js', '/shared/youtube-id.js', '/studio/js/youtube.js', '/shared/dl-name.js',
+   '/studio/js/mp4-mux.js', '/studio/js/mp4-audio.js', '/studio/js/audio-encode.js', '/studio/js/scene-render.js', '/studio/js/scene-panel.js', '/studio/js/lyrics-editor.js', '/shared/scene.js',
+   '/studio/icons/icon-192.png', '/studio/icons/icon-512.png', '/studio/icons/mark.png', '/studio/icons/fs-mark.png', '/studio/icons/wordmark.png', '/studio/icons/logo-full.png', '/studio/icons/favicon-64.png', '/studio/icons/apple-touch-180.png',
+   '/shared/config.js', '/shared/supabase.js', '/shared/vendor/dexie.min.js', '/shared/vendor/supabase.js',
+diff --git a/supabase/migrations/012_youtube.sql b/supabase/migrations/012_youtube.sql
+new file mode 100644
+index 0000000..e07949d
+--- /dev/null
++++ b/supabase/migrations/012_youtube.sql
+@@ -0,0 +1,46 @@
++-- 012: YouTube (live video link, channel connection, and YouTube videos shown as posts)
++-- Run this once in the Supabase SQL editor. It only adds things; nothing existing changes.
++--
++--   * youtube_link: the one saved connection to your YouTube channel (a read-only token). Only the Worker (with the
++--     service key) can read or write it. No browser, signed in or not, can reach it.
++--   * published_items.youtube_id: a post that plays from YouTube. Its views, reactions and comments are counted
++--     here, on your site, exactly like any other post.
++--   * items_public gets youtube_id at the end (nothing existing changes).
++
++create table if not exists public.youtube_link (
++  id smallint primary key default 1 check (id = 1),     -- one connection only
++  refresh_token text not null,
++  channel_id text,
++  channel_title text,
++  uploads_playlist text,
++  connected_at timestamptz not null default now()
++);
++alter table public.youtube_link enable row level security;
++revoke all on public.youtube_link from anon, authenticated;   -- no policies on purpose: service role only
++
++alter table public.published_items add column if not exists youtube_id text;
++do $$
++begin
++  if not exists (select 1 from pg_constraint where conname = 'published_items_youtube_id_format') then
++    alter table public.published_items
++      add constraint published_items_youtube_id_format check (youtube_id is null or youtube_id ~ '^[A-Za-z0-9_-]{11}$');
++  end if;
++end $$;
++create index if not exists published_items_youtube_idx on public.published_items (youtube_id) where youtube_id is not null;
++
++create or replace view public.items_public with (security_invoker = false) as
++select i.id, i.kind, i.title, i.description, i.mime, i.duration,
++       i.public_media_key, i.public_thumb_key, i.published_at, i.comments_enabled, i.reactions_enabled,
++       coalesce(c.n_views, 0) as n_views, coalesce(c.n_love, 0) as n_love, coalesce(c.n_like, 0) as n_like,
++       coalesce(c.n_reactions, 0) as n_reactions, coalesce(c.n_comments, 0) as n_comments,
++       i.source_live_id, i.thumb_kind,
++       i.allow_download, i.public_alt_key, i.alt_mime, i.scene, i.public_bg_key, i.show_lyrics,
++       case when i.show_lyrics then i.lyrics end as lyrics,
++       i.album_title, i.album_pos,
++       i.youtube_id
++from public.published_items i
++left join public.counters c on c.item_id = i.id
++where i.status = 'published';
++
++revoke all on public.items_public from anon, authenticated;
++grant select on public.items_public to anon, authenticated;
+diff --git a/worker/src/index.js b/worker/src/index.js
+index 5e39bd8..f63c5ae 100644
+--- a/worker/src/index.js
++++ b/worker/src/index.js
+@@ -3,9 +3,11 @@
+ //  - Public: streams published files from the PUBLIC bucket (GET /public/...).
+ //  - Viewers: merges a guest's reactions and comments into their real account.
+ //  - Live (Phase 3): /live/ws (the room), /live/sfu/* (audio through the Cloudflare SFU), /live/assets (replay files).
++//  - YouTube (owner only, read only): /youtube/* (see youtube.js).
+ 
+ import { LiveRoom } from './live-room.js';
+ import { sfuConfigured, createSession, newTracks, renegotiate, SESSION_RE, TRACK_RE } from './sfu.js';
++import { youtubeCallback, youtubeOwner } from './youtube.js';
+ 
+ export { LiveRoom };
+ 
+@@ -234,11 +236,15 @@ export default {
+       }
+       if (path === '/viewer/merge' && request.method === 'POST') return await mergeViewer(request, env, cors);
+ 
++      // ---- YouTube: Google sends the browser back here (a signed state proves who started it); everything else is owner only, below
++      if (path === '/youtube/callback' && request.method === 'GET') return await youtubeCallback(request, env, url);
++
+       // ---- live (each route checks who is calling; /live/assets below is owner only)
+       if (path.startsWith('/live/') && path !== '/live/assets') return await liveRoute(request, env, cors, url);
+ 
+       // ---- owner only
+       await requireOwner(request, env);
++      if (path.startsWith('/youtube/')) return await youtubeOwner(request, env, cors, url);
+       const bucket = env.PRIVATE_BUCKET;
+       const maxBytes = Number(env.MAX_UPLOAD_MB || 200) * 1024 * 1024;
+ 
+diff --git a/worker/src/youtube.js b/worker/src/youtube.js
+new file mode 100644
+index 0000000..efb7970
+--- /dev/null
++++ b/worker/src/youtube.js
+@@ -0,0 +1,273 @@
++// YouTube for FabStudio. Owner only, read only, and nothing here touches the audio live.
++//
++//   GET  /youtube/callback      Google sends the browser back here after you allow access (checked by a signed state)
++//   GET  /youtube/status        is it set up, is it connected
++//   POST /youtube/connect       gives the Google sign-in address
++//   POST /youtube/disconnect    forgets the connection and tells Google to revoke it
++//   GET  /youtube/live          ONE request to YouTube: is your channel live right now (the "Check YouTube live" button)
++//   GET  /youtube/videos        a page of your uploads (about 2 quota units per page)
++//   POST /youtube/publish       puts one of your videos on Fabris Poet as a post that plays from YouTube
++//
++// The refresh token lives in the Supabase table youtube_link, which only this Worker (service key) can read.
++// Secrets: YT_CLIENT_ID, YT_CLIENT_SECRET (docs/YOUTUBE-UPDATE.md). Nothing is ever polled: YouTube is only
++// asked when a button is pressed.
++
++const SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
++const API = 'https://www.googleapis.com/youtube/v3';
++const VIDEO_RE = /^[A-Za-z0-9_-]{11}$/;
++const enc = new TextEncoder();
++
++class YtError extends Error {
++  constructor(status, message) { super(message); this.status = status; }
++}
++
++const json = (data, cors, status = 200) =>
++  new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', ...cors } });
++
++export const youtubeConfigured = (env) => !!(env.YT_CLIENT_ID && env.YT_CLIENT_SECRET && env.SUPABASE_SERVICE_KEY);
++
++/* ---------- Supabase (service key): the saved connection and the posts ---------- */
++const svc = (env) => ({ apikey: env.SUPABASE_SERVICE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` });
++
++async function dbGet(env, path) {
++  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, { headers: svc(env) });
++  if (!r.ok) throw new YtError(502, 'The database refused this. Did you run migration 012_youtube.sql?');
++  return await r.json();
++}
++async function dbSend(env, path, method, body, prefer = 'return=minimal') {
++  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
++    method, headers: { ...svc(env), 'Content-Type': 'application/json', Prefer: prefer }, body: body ? JSON.stringify(body) : undefined,
++  });
++  if (!r.ok) throw new YtError(502, 'The database refused this. Did you run migration 012_youtube.sql?');
++}
++const getLink = async (env) => (await dbGet(env, 'youtube_link?id=eq.1&select=*'))[0] || null;
++const saveLink = (env, row) => dbSend(env, 'youtube_link?on_conflict=id', 'POST', { id: 1, ...row }, 'resolution=merge-duplicates,return=minimal');
++const deleteLink = (env) => dbSend(env, 'youtube_link?id=eq.1', 'DELETE');
++
++/* ---------- signed state for the Google round trip (no extra secret: the Google client secret signs it) ---------- */
++const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
++const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
++async function mac(env, data) {
++  const key = await crypto.subtle.importKey('raw', enc.encode(env.YT_CLIENT_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
++  return b64u(await crypto.subtle.sign('HMAC', key, enc.encode(data)));
++}
++const same = (a, b) => { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0; };
++async function signState(env, payload) {
++  const body = b64u(enc.encode(JSON.stringify(payload)));
++  return `${body}.${await mac(env, body)}`;
++}
++async function readState(env, state) {
++  const [body, sig] = String(state || '').split('.');
++  if (!body || !sig || !same(await mac(env, body), sig)) return null;
++  try {
++    const p = JSON.parse(new TextDecoder().decode(unb64u(body)));
++    return p && p.exp > Date.now() && typeof p.r === 'string' ? p : null;
++  } catch { return null; }
++}
++
++/* ---------- Google ---------- */
++const redirectUri = (url) => `${url.origin}/youtube/callback`;
++let cached = { token: '', exp: 0 };
++
++async function tokenCall(env, params) {
++  const r = await fetch('https://oauth2.googleapis.com/token', {
++    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
++    body: new URLSearchParams({ client_id: env.YT_CLIENT_ID, client_secret: env.YT_CLIENT_SECRET, ...params }),
++  });
++  return { ok: r.ok, data: await r.json().catch(() => ({})) };
++}
++
++async function accessToken(env) {
++  if (cached.token && Date.now() < cached.exp - 60000) return cached.token;
++  const link = await getLink(env);
++  if (!link) throw new YtError(409, 'YouTube is not connected.');
++  const { ok, data } = await tokenCall(env, { grant_type: 'refresh_token', refresh_token: link.refresh_token });
++  if (!ok) {
++    if (data.error === 'invalid_grant') {
++      await deleteLink(env).catch(() => {});
++      cached = { token: '', exp: 0 };
++      throw new YtError(409, 'The YouTube connection has expired. Connect again.');
++    }
++    throw new YtError(502, 'Google refused the sign-in. Try connecting again.');
++  }
++  cached = { token: data.access_token, exp: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
++  return cached.token;
++}
++
++async function gapi(env, path, params) {
++  for (let attempt = 0; attempt < 2; attempt++) {
++    const token = await accessToken(env);
++    const r = await fetch(`${API}/${path}?${new URLSearchParams(params)}`, { headers: { Authorization: `Bearer ${token}` } });
++    if (r.status === 401 && attempt === 0) { cached = { token: '', exp: 0 }; continue; }
++    const d = await r.json().catch(() => ({}));
++    if (r.ok) return d;
++    const reason = d?.error?.errors?.[0]?.reason || '';
++    if (reason === 'quotaExceeded' || reason === 'rateLimitExceeded') throw new YtError(429, 'YouTube\'s daily allowance for this app is used up. Try again after midnight Pacific time.');
++    if (reason === 'liveStreamingNotEnabled') throw new YtError(409, 'Live streaming is not enabled on this YouTube channel yet.');
++    throw new YtError(502, `YouTube said no (${reason || r.status}).`);
++  }
++  throw new YtError(502, 'YouTube said no.');
++}
++
++const seconds = (iso) => {
++  const m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(String(iso || ''));
++  return m ? (+m[1] || 0) * 86400 + (+m[2] || 0) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0) : 0;
++};
++const bestThumb = (t) => (t?.medium || t?.high || t?.default || t?.standard || {}).url || '';
++
++/* ---------- the Google round trip ---------- */
++export async function youtubeCallback(request, env, url) {
++  if (!youtubeConfigured(env)) return new Response('YouTube is not set up on this Worker.', { status: 501 });
++  const st = await readState(env, url.searchParams.get('state'));
++  if (!st) return new Response('This sign-in link has expired. Go back to FabStudio and press Connect YouTube again.', { status: 400 });
++  const go = (flag) => { const u = new URL(st.r); u.searchParams.set('yt', flag); return Response.redirect(u.toString(), 302); };
++  if (url.searchParams.get('error')) return go('denied');
++  const code = url.searchParams.get('code');
++  if (!code) return go('error');
++  const { ok, data } = await tokenCall(env, { grant_type: 'authorization_code', code, redirect_uri: redirectUri(url) });
++  if (!ok || !data.refresh_token || !data.access_token) return go('error');
++  const r = await fetch(`${API}/channels?${new URLSearchParams({ part: 'snippet,contentDetails', mine: 'true' })}`, { headers: { Authorization: `Bearer ${data.access_token}` } });
++  const ch = r.ok ? (await r.json().catch(() => ({}))).items?.[0] : null;
++  if (!ch) { await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(data.refresh_token)}`, { method: 'POST' }).catch(() => {}); return go('nochannel'); }
++  await saveLink(env, {
++    refresh_token: data.refresh_token, channel_id: ch.id, channel_title: String(ch.snippet?.title || '').slice(0, 100),
++    uploads_playlist: ch.contentDetails?.relatedPlaylists?.uploads || null, connected_at: new Date().toISOString(),
++  });
++  cached = { token: data.access_token, exp: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
++  return go('connected');
++}
++
++/* ---------- the owner's routes (the caller has already been checked as the owner) ---------- */
++export async function youtubeOwner(request, env, cors, url) {
++  const path = url.pathname;
++  const method = request.method;
++  try {
++    if (path === '/youtube/status' && method === 'GET') {
++      if (!youtubeConfigured(env)) return json({ configured: false, connected: false }, cors);
++      const link = await getLink(env);
++      return json({ configured: true, connected: !!link, channelTitle: link?.channel_title || '' }, cors);
++    }
++
++    if (!youtubeConfigured(env)) throw new YtError(501, 'YouTube is not set up on the Worker yet (see docs/YOUTUBE-UPDATE.md).');
++
++    if (path === '/youtube/connect' && method === 'POST') {
++      const body = await request.json().catch(() => ({}));
++      const allowed = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
++      let back = '';
++      try { const u = new URL(String(body.return || '')); if (allowed.includes(u.origin)) back = u.origin + u.pathname; } catch { /* use the default */ }
++      if (!back) back = `${allowed[0] || url.origin}/studio/`;
++      const state = await signState(env, { r: back, exp: Date.now() + 10 * 60 * 1000 });
++      const auth = new URLSearchParams({
++        client_id: env.YT_CLIENT_ID, redirect_uri: redirectUri(url), response_type: 'code', scope: SCOPE,
++        access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state,
++      });
++      return json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${auth}` }, cors);
++    }
++
++    if (path === '/youtube/disconnect' && method === 'POST') {
++      const link = await getLink(env);
++      if (link) {
++        await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(link.refresh_token)}`, { method: 'POST' }).catch(() => {});
++        await deleteLink(env);
++      }
++      cached = { token: '', exp: 0 };
++      return json({ ok: true }, cors);
++    }
++
++    // The "Check YouTube live" button. One request to YouTube (about 1 quota unit), only when pressed.
++    if (path === '/youtube/live' && method === 'GET') {
++      if (!(await getLink(env))) return json({ connected: false, live: null }, cors);
++      const d = await gapi(env, 'liveBroadcasts', { part: 'snippet,status,contentDetails', broadcastStatus: 'active', maxResults: '5' });
++      const items = (d.items || []).filter((b) => b.status?.lifeCycleStatus !== 'testing');
++      items.sort((a, b) => String(b.snippet?.actualStartTime || '').localeCompare(String(a.snippet?.actualStartTime || '')));
++      const b = items[0];
++      if (!b) return json({ connected: true, live: null }, cors);
++      const privacy = b.status?.privacyStatus || '';
++      return json({
++        connected: true,
++        live: {
++          videoId: b.id, title: String(b.snippet?.title || '').slice(0, 120), thumb: bestThumb(b.snippet?.thumbnails),
++          privacy, embeddable: b.contentDetails?.enableEmbed !== false && privacy !== 'private',
++        },
++      }, cors);
++    }
++
++    if (path === '/youtube/videos' && method === 'GET') {
++      const link = await getLink(env);
++      if (!link) return json({ connected: false, items: [], next: null }, cors);
++      let uploads = link.uploads_playlist;
++      if (!uploads) {
++        const c = await gapi(env, 'channels', { part: 'contentDetails', mine: 'true' });
++        uploads = c.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
++        if (!uploads) throw new YtError(409, 'This channel has no uploads yet.');
++        await saveLink(env, { refresh_token: link.refresh_token, channel_id: link.channel_id, channel_title: link.channel_title, uploads_playlist: uploads, connected_at: link.connected_at });
++      }
++      const page = String(url.searchParams.get('page') || '').slice(0, 100);
++      const list = await gapi(env, 'playlistItems', { part: 'contentDetails', playlistId: uploads, maxResults: '20', ...(page ? { pageToken: page } : {}) });
++      const ids = (list.items || []).map((i) => i.contentDetails?.videoId).filter((x) => VIDEO_RE.test(String(x || '')));
++      let videos = [];
++      if (ids.length) videos = (await gapi(env, 'videos', { part: 'snippet,contentDetails,status', id: ids.join(',') })).items || [];
++      const byId = new Map(videos.map((v) => [v.id, v]));
++      let onSite = new Map();
++      if (ids.length) {
++        try { onSite = new Map((await dbGet(env, `published_items?youtube_id=in.(${ids.join(',')})&select=id,youtube_id`)).map((r) => [r.youtube_id, r.id])); } catch { /* before migration 012 nothing is on the site */ }
++      }
++      const items = ids.filter((id) => byId.has(id)).map((id) => {
++        const v = byId.get(id);
++        return {
++          id, title: String(v.snippet?.title || '').slice(0, 200), thumb: bestThumb(v.snippet?.thumbnails), seconds: seconds(v.contentDetails?.duration),
++          privacy: v.status?.privacyStatus || '', embeddable: v.status?.embeddable !== false, live: v.snippet?.liveBroadcastContent || 'none',
++          publishedAt: v.snippet?.publishedAt || '', itemId: onSite.get(id) || null,
++        };
++      });
++      return json({ connected: true, channelTitle: link.channel_title || '', items, next: list.nextPageToken || null }, cors);
++    }
++
++    if (path === '/youtube/publish' && method === 'POST') {
++      const body = await request.json().catch(() => ({}));
++      const videoId = String(body.videoId || '');
++      if (!VIDEO_RE.test(videoId)) throw new YtError(400, 'That is not a YouTube video.');
++      const link = await getLink(env);
++      if (!link) throw new YtError(409, 'YouTube is not connected.');
++      const had = (await dbGet(env, `published_items?youtube_id=eq.${videoId}&select=id`))[0];
++      if (had) return json({ id: had.id, already: true }, cors);
++      const v = (await gapi(env, 'videos', { part: 'snippet,contentDetails,status', id: videoId })).items?.[0];
++      if (!v) throw new YtError(404, 'That video was not found.');
++      if (link.channel_id && v.snippet?.channelId !== link.channel_id) throw new YtError(400, 'Only videos from your own channel can be added.');
++      if (v.status?.privacyStatus === 'private') throw new YtError(400, 'This video is Private on YouTube. Make it Unlisted or Public first.');
++      if (v.status?.embeddable === false) throw new YtError(400, 'Embedding is switched off for this video. Turn on "Allow embedding" in YouTube Studio.');
++      if (v.snippet?.liveBroadcastContent && v.snippet.liveBroadcastContent !== 'none') throw new YtError(400, 'This is a live that has not finished. Add it after it ends, or use Check YouTube live on a live page.');
++
++      const id = crypto.randomUUID();
++      // The picture is copied to your own public bucket, so cards and share previews work like any other post.
++      let thumbKey = null;
++      for (const name of ['maxresdefault', 'hqdefault']) {
++        try {
++          const t = await fetch(`https://i.ytimg.com/vi/${videoId}/${name}.jpg`);
++          if (!t.ok) continue;
++          const buf = await t.arrayBuffer();
++          if (buf.byteLength < 3000) continue;
++          thumbKey = `pub/${id}/thumb-${Date.now()}.jpg`;
++          await env.PUBLIC_BUCKET.put(thumbKey, buf, { httpMetadata: { contentType: 'image/jpeg' } });
++          break;
++        } catch { thumbKey = null; }
++      }
++      const now = new Date().toISOString();
++      try {
++        await dbSend(env, 'published_items', 'POST', {
++          id, kind: 'video', title: String(v.snippet?.title || 'Untitled').slice(0, 200), description: '', mime: null,
++          duration: seconds(v.contentDetails?.duration) || null, public_thumb_key: thumbKey, status: 'published', published_at: now,
++          comments_enabled: true, reactions_enabled: true, created_at: now, updated_at: now, youtube_id: videoId,
++        });
++      } catch (e) {
++        if (thumbKey) await env.PUBLIC_BUCKET.delete(thumbKey).catch(() => {});
++        throw e;
++      }
++      return json({ id, title: v.snippet?.title || '' }, cors);
++    }
++    throw new YtError(404, 'Not found');
++  } catch (e) {
++    if (e instanceof YtError) return json({ error: e.message }, cors, e.status);
++    return json({ error: 'Server error' }, cors, 500);
++  }
++}
+diff --git a/worker/wrangler.toml.youtube-additions.txt b/worker/wrangler.toml.youtube-additions.txt
+new file mode 100644
+index 0000000..dc42f01
+--- /dev/null
++++ b/worker/wrangler.toml.youtube-additions.txt
+@@ -0,0 +1,10 @@
++# YouTube (docs/YOUTUBE-UPDATE.md). Nothing to add to wrangler.toml itself.
++#
++# Set two secrets (never put them in a file), then redeploy:
++#   npx wrangler secret put YT_CLIENT_ID        <- Google Cloud > Credentials > OAuth client ID
++#   npx wrangler secret put YT_CLIENT_SECRET    <- the client secret next to it
++#   npx wrangler deploy
++#
++# SUPABASE_SERVICE_KEY must already be set (live chat and guest merging use it); YouTube uses it to keep the
++# connection in the youtube_link table. The redirect URI to register in Google Cloud is
++#   <your Worker address>/youtube/callback

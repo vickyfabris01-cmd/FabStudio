@@ -2,6 +2,7 @@
 // screen) and the public page (only the keys marked public). Plain JavaScript, no browser or Worker APIs.
 //
 // To add a setting: add one entry to FIELDS and give it a default. Studio draws it, the Worker validates it.
+import { parseYouTubeId } from './youtube-id.js';
 
 export const FIELDS = [
   // ---- what viewers see
@@ -27,6 +28,9 @@ export const FIELDS = [
   // ---- countdown
   { key: 'countdownEnabled', group: 'Countdown', type: 'bool', default: true, public: true, label: 'Show a countdown before the start', hint: 'The countdown never starts the live. Only your Go live button does.' },
   { key: 'countdownMinutes', group: 'Countdown', type: 'int', default: 60, min: 5, max: 1440, unit: 'minutes before', public: true, label: 'Countdown begins' },
+  // ---- YouTube video (optional). The audio live never depends on it.
+  { key: 'ytVideoId', group: 'YouTube video', type: 'ytid', default: '', public: true, label: 'YouTube link or video ID', hint: 'Paste the link of your YouTube live. The Check YouTube live button on the ready card fills this in for you.' },
+  { key: 'ytShow', group: 'YouTube video', type: 'bool', default: false, public: true, label: 'Viewers can watch the video', hint: 'Adds a Watch video button on the live page. Audio stays the default.' },
   // ---- host
   { key: 'hostName', group: 'Host', type: 'text', default: 'Fabris', max: 30, label: 'Name shown on your chat messages' },
 ];
@@ -47,6 +51,9 @@ export function cleanSettings(input, base = DEFAULT_SETTINGS) {
     } else if (f.type === 'choice') {
       const found = f.options.find(([val]) => String(val) === String(v));
       if (found) out[f.key] = found[0];
+    } else if (f.type === 'ytid') {
+      const id = parseYouTubeId(v);   // '' clears it, null means it was not a YouTube link (the old value stays)
+      if (id !== null) out[f.key] = id;
     } else if (f.type === 'text') {
       const s = String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, f.max);
       out[f.key] = s || f.default;
@@ -59,5 +66,6 @@ export function cleanSettings(input, base = DEFAULT_SETTINGS) {
 export function publicSettings(s) {
   const out = {};
   for (const f of FIELDS) if (f.public) out[f.key] = s[f.key];
+  if (!out.ytShow) out.ytVideoId = '';   // an unlisted YouTube link stays private until the host shows it
   return out;
 }

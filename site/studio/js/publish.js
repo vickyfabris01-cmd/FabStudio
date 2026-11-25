@@ -13,6 +13,7 @@ import { downloadName, extOf } from '../../shared/dl-name.js';
 import { extractAudio } from './mp4-audio.js';
 import { scenePanel, videoMaker } from './scene-panel.js';
 import { toM4a } from './audio-encode.js';
+import { youtubeButton, publicUrl } from './youtube.js';
 import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
 
 // One place to change the upload limits.
@@ -308,7 +309,7 @@ function statsEl(c) {
 }
 
 const statusText = (r) => (r.status === 'published'
-  ? `Published · ${fmtAgo(r.publishedAt || r.updatedAt)}`
+  ? `${r.youtubeId ? 'From YouTube · ' : ''}Published · ${fmtAgo(r.publishedAt || r.updatedAt)}`
   : `${STATUS[r.status] || r.status} · edited ${fmtAgo(r.updatedAt)}${r.dirty ? ' · waiting to sync' : ''}`);
 
 /* ---------- list (the Studio tab) ---------- */
@@ -342,10 +343,13 @@ export async function publishListView(nav) {
       onclick: (e) => {
         e.stopPropagation();
         popMenu(dots, [
-          { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
-          { label: 'Open', onclick: () => nav.open(r.id) },
-          { label: 'Download', onclick: () => act(() => downloadItem(r.id)) },
-          ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, { label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }] : []),
+          // a post that plays from YouTube has no file of its own: it opens its public page, and leaves the site with Delete
+          ...(r.youtubeId ? [{ label: 'Open page', onclick: () => window.open(`/poem/?id=${r.id}`, '_blank') }] : [
+            { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
+            { label: 'Open', onclick: () => nav.open(r.id) },
+            { label: 'Download', onclick: () => act(() => downloadItem(r.id)) },
+          ]),
+          ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, ...(r.youtubeId ? [] : [{ label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }])] : []),
           { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
         ]);
       },
@@ -354,7 +358,8 @@ export async function publishListView(nav) {
   };
 
   const rowEl = (r) => {
-    const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' })) : h('div', { class: 'thumb ph' });
+    const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' }))
+      : r.youtubeId && r.publicThumbKey ? h('img', { class: 'thumb', alt: '', src: publicUrl(r.publicThumbKey) }) : h('div', { class: 'thumb ph' });
     const job = isBusy(r.id) ? jobFor(r.id) : null;
     const failed = jobFor(r.id)?.state === 'error';
     const line = h('div', { class: (failed ? 'sub error' : 'sub') + (r.status === 'published' && !failed ? ' ok' : '') },
@@ -388,7 +393,7 @@ export async function publishListView(nav) {
     }
     const box = picked.on ? tickBox(picked.ids.has(r.id)) : null;
     const li = h('li', { class: 'item' + (picked.on && picked.ids.has(r.id) ? ' picked' : ''), onclick: () => {
-      if (!picked.on) return nav.open(r.id);
+      if (!picked.on) return r.youtubeId ? window.open(`/poem/?id=${r.id}`, '_blank') : nav.open(r.id);
       if (picked.ids.has(r.id)) picked.ids.delete(r.id); else picked.ids.add(r.id);
       box.checked = picked.ids.has(r.id); li.classList.toggle('picked', box.checked); selBar.paint();
     } }, box, thumb, body, end);
@@ -422,7 +427,7 @@ export async function publishListView(nav) {
   const live = h('button', { class: 'iconbtn mic', type: 'button', 'aria-label': 'Go live (coming later)', onclick: () => toast('Going live comes in a later phase.') }, micIcon(22));
   const el = h('section', { class: 'view' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Studio'),
-      h('div', { class: 'row' }, live, window.matchMedia('(min-width: 900px)').matches ? h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake') : null)),
+      h('div', { class: 'row' }, youtubeButton(() => nav.refresh()), live, window.matchMedia('(min-width: 900px)').matches ? h('button', { class: 'btn primary', onclick: () => nav.bake() }, 'Bake') : null)),
     filters, selBar.el, list, upload);
 
   if (navigator.onLine && stats.size) {

@@ -3,9 +3,11 @@
 //  - Public: streams published files from the PUBLIC bucket (GET /public/...).
 //  - Viewers: merges a guest's reactions and comments into their real account.
 //  - Live (Phase 3): /live/ws (the room), /live/sfu/* (audio through the Cloudflare SFU), /live/assets (replay files).
+//  - YouTube (owner only, read only): /youtube/* (see youtube.js).
 
 import { LiveRoom } from './live-room.js';
 import { sfuConfigured, createSession, newTracks, renegotiate, SESSION_RE, TRACK_RE } from './sfu.js';
+import { youtubeCallback, youtubeOwner } from './youtube.js';
 
 export { LiveRoom };
 
@@ -234,11 +236,15 @@ export default {
       }
       if (path === '/viewer/merge' && request.method === 'POST') return await mergeViewer(request, env, cors);
 
+      // ---- YouTube: Google sends the browser back here (a signed state proves who started it); everything else is owner only, below
+      if (path === '/youtube/callback' && request.method === 'GET') return await youtubeCallback(request, env, url);
+
       // ---- live (each route checks who is calling; /live/assets below is owner only)
       if (path.startsWith('/live/') && path !== '/live/assets') return await liveRoute(request, env, cors, url);
 
       // ---- owner only
       await requireOwner(request, env);
+      if (path.startsWith('/youtube/')) return await youtubeOwner(request, env, cors, url);
       const bucket = env.PRIVATE_BUCKET;
       const maxBytes = Number(env.MAX_UPLOAD_MB || 200) * 1024 * 1024;
 

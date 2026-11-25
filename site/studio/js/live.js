@@ -15,6 +15,7 @@ import { chatPane } from './console/chatfeed.js';
 import { sourceControl } from './console/source.js';
 import { settingsList, openSettingsModal } from './console/settings-modal.js';
 import { recapPane } from './console/recap.js';
+import { liveCheckRow } from './youtube.js';
 import { syncAndWait, syncSoon } from './sync.js';
 
 const needNet = () => { if (!navigator.onLine) throw new Error('This needs internet.'); };
@@ -51,7 +52,7 @@ function newLiveModal(nav) {
   const err = h('p', { class: 'error' });
   const go = h('button', { class: 'btn primary', type: 'button' });
   const gear = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Live settings', 'aria-expanded': 'false', title: 'Live settings' }, gearIcon());
-  const panel = h('div', { hidden: true }, settingsList(chosen, (patch) => Object.assign(chosen, patch), { skip: ['Reactions', 'Host'] }));
+  const panel = h('div', { hidden: true }, settingsList(chosen, (patch) => Object.assign(chosen, patch), { skip: ['Reactions', 'Host', 'YouTube video'] }));
   gear.onclick = () => { panel.hidden = !panel.hidden; gear.setAttribute('aria-expanded', String(!panel.hidden)); };
   const setMode = (m) => {
     mode = m;
@@ -241,6 +242,10 @@ export async function liveConsoleView(itemId, nav) {
     h('div', { class: 'row c-sched-l' }, h('div', { class: 'grow' }, linkIn), h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(itemId) }, 'Copy')),
     laptop ? go : null);
 
+  /* ----- YouTube video: the Check YouTube live button, on the ready card (before the live is on air) ----- */
+  const yt = liveCheckRow({ settings: () => engine.s.row.settings, save: (patch) => engine.saveSettings(patch) });
+  const ytCard = h('section', { class: 'card c-yt' }, yt.el);
+
   /* ----- sound strip: level, gain, volume, input, output, show title ----- */
   const sel = h('select', { 'aria-label': 'Audio input' });
   const outSel = h('select', { 'aria-label': 'Audio output' });
@@ -301,7 +306,7 @@ export async function liveConsoleView(itemId, nav) {
     recapBusy = false;
   };
 
-  root.append(header.el, sched, sound, h('div', { class: 'c-split' }, reading.el, afterBox, chat.el));
+  root.append(header.el, sched, ytCard, sound, h('div', { class: 'c-split' }, reading.el, afterBox, chat.el));
 
   const paint = () => {
     const st = s();
@@ -312,6 +317,8 @@ export async function liveConsoleView(itemId, nav) {
     stats.el.hidden = pre || ended;   // the recap has its own saved numbers
     stats.paint();
     sched.hidden = !pre;
+    ytCard.hidden = !pre;
+    if (pre) yt.paint();
     if (pre) {
       const at = st.row.starts_at;
       when.textContent = at ? `Planned start ${new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'No start time set. Press Go live whenever you are ready.';

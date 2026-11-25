@@ -6,6 +6,7 @@ import * as data from './data.js';
 import { maybeInvite } from './invite.js';
 import { downloadName, extOf } from '../shared/dl-name.js';
 import { drawScene, SCENE_W, SCENE_H } from '../shared/scene.js';
+import { youtubePlayer } from './youtube-embed.js';
 
 const svg = (inner, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="${cls}">${inner}</svg>`;
 const ICON = {
@@ -217,7 +218,7 @@ async function main() {
   const prevPart = () => (parts.length ? parts[(partIx - 1 + parts.length) % parts.length] : null);
   const goPart = (x) => { if (!x) return; if (x.id === id) { const m = player.media(); m.currentTime = 0; m.play().catch(() => {}); } else location.assign(`/poem/?id=${x.id}&play=1`); };
 
-  const player = buildPlayer();
+  const player = item.youtube_id ? youtubePlayer(item, { thumbUrl: thumb, isMember, requireAuth }) : buildPlayer();   // a post from YouTube plays in YouTube's player
   function buildPlayer() {
     const both = !!(audioUrl && videoUrl);
     const KEY = 'fp.mode';
@@ -441,7 +442,7 @@ async function main() {
     document.addEventListener('keydown', onKey);
     document.body.append(wrap);
   }
-  const dlBtn = item.allow_download === false ? null
+  const dlBtn = item.allow_download === false || item.youtube_id ? null
     : h('button', { class: 'react dl', type: 'button', 'aria-label': 'Download', title: 'Download', onclick: openDownload }, icon('download'));
 
   const titleText = h('h1', {}, item.title);

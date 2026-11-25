@@ -5,6 +5,7 @@ import { connectRoom } from '../shared/live-socket.js';
 import { pullAudio, watchQuality } from '../shared/sfu.js';
 import { initAuth, mountAccountChip, getSession, onAuth, requireAuth, isMember } from './auth-ui.js';
 import * as data from './data.js';
+import { liveVideo } from './youtube-embed.js';
 
 const svg = (d) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return s.firstChild; };
 const LOVE = '<path d="M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572"/>';
@@ -100,6 +101,8 @@ async function main() {
   const stageImg = row.public_thumb_key ? h('img', { src: data.mediaUrl(row.public_thumb_key), alt: '' }) : null;
   const over = h('div', { class: 'l-over' });
   const stage = h('div', { class: 'l-stage' }, stageImg, h('div', { class: 'l-stagebody' }, cardTop, over));
+  // The optional YouTube video. Opening it pauses this page's audio (so nothing plays twice); closing it lets the audio start again.
+  const yt = liveVideo({ stage, onOpen: () => { S.stopped = true; stopListen(); paint(); }, onClose: () => { S.stopped = false; paint(); } });
   const audio = h('audio', { autoplay: true, playsinline: true });
   audio.hidden = true;
   const note = h('div', { class: 'l-note', hidden: true });
@@ -115,7 +118,7 @@ async function main() {
   const reqList = h('div', { class: 'l-menulist' });
   const reqOther = h('button', { type: 'button', role: 'option', class: 'other', onclick: () => { S.reqMode = true; S.menu = false; paint(); chatIn.focus(); } }, 'Other poem…');
   const reqMenu = h('div', { class: 'l-menu', role: 'listbox', hidden: true }, reqList, reqOther);
-  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, shareBtn, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
+  const pills = h('div', { class: 'l-pills' }, viewsPill, lovePill, shareBtn, yt.btn, h('span', { class: 'grow' }), h('span', { class: 'l-reqwrap' }, reqBtn, reqMenu));
 
   const feed = h('div', { class: 'l-feed', role: 'log', 'aria-live': 'polite' });
 
@@ -148,7 +151,7 @@ async function main() {
   const bubbles = h('div', { class: 'l-bubbles', 'aria-hidden': 'true' });
   const dock = h('div', { class: 'l-dock', hidden: true }, bubbles, h('div', { class: 'l-dockin' }, loveBtn, h('div', { class: 'l-box' }, modeChip, chatIn), sendBtn));
 
-  root.replaceChildren(stage, audio, before, pills, gate, note, feed, moreBox);
+  root.replaceChildren(stage, yt.box, audio, before, pills, gate, note, feed, moreBox);
   document.body.append(dock);
 
   const els = { q: h('div', { class: 'l-q-ind' }) };
@@ -397,6 +400,8 @@ async function main() {
     paintQ();
     // listening starts by itself when the audio is on, unless the person stopped it (a failed try waits a few seconds)
     if (live && audioOn && !blocked && !S.listening && !S.stopped && Date.now() - S.failedAt > 5000) listen(true);
+
+    yt.paint({ live, blocked, settings, title: S.room?.title || S.row.title });
 
     // pills
     const showPills = live && !blocked;
