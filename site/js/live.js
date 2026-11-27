@@ -122,25 +122,6 @@ async function main() {
 
   const feed = h('div', { class: 'l-feed', role: 'log', 'aria-live': 'polite' });
 
-  // after the live: a thank-you, then four random regular posts. Viewers see no counts of the live itself.
-  const moreBox = h('div', { class: 'l-more', hidden: true });
-  const more = { items: null, loading: false };
-  async function loadMore() {
-    if (more.items || more.loading) return;
-    more.loading = true;
-    try { more.items = await data.listRandomPosts(id, 4); } catch { more.items = []; }
-    more.loading = false;
-    const card = (it) => {
-      const t = data.mediaUrl(it.public_thumb_key);
-      return h('a', { class: 'mini', href: `/poem/?id=${it.id}` },
-        h('div', { class: 'th' }, t ? h('img', { src: t, alt: '', loading: 'lazy' }) : null),
-        h('div', { class: 'mini-t' }, it.title || 'Untitled'),
-        h('div', { class: 'mini-ct' },
-          h('span', {}, svg(EYE), String(it.n_views ?? 0)), h('span', {}, svg(LIKE), String(it.n_like ?? 0)), h('span', {}, svg(COMMENT), String(it.n_comments ?? 0))));
-    };
-    moreBox.replaceChildren(...(more.items.length ? [h('h2', {}, 'More from Fabris'), h('div', { class: 'mini-grid l-2x2' }, ...more.items.map(card))] : []));
-    paint();
-  }
   const gate = h('div', { class: 'l-panel l-gate', hidden: true });
 
   // the message box, docked at the bottom and lifted above the keyboard
@@ -151,7 +132,7 @@ async function main() {
   const bubbles = h('div', { class: 'l-bubbles', 'aria-hidden': 'true' });
   const dock = h('div', { class: 'l-dock', hidden: true }, bubbles, h('div', { class: 'l-dockin' }, loveBtn, h('div', { class: 'l-box' }, modeChip, chatIn), sendBtn));
 
-  root.replaceChildren(stage, yt.box, audio, before, pills, gate, note, feed, moreBox);
+  root.replaceChildren(stage, yt.box, audio, before, pills, gate, note, feed);
   document.body.append(dock);
 
   const els = { q: h('div', { class: 'l-q-ind' }) };
@@ -456,10 +437,6 @@ async function main() {
       if (end) feed.scrollTop = feed.scrollHeight;
       feedKey = fk;
     }
-
-    // after the live: four random posts under the thank-you
-    moreBox.hidden = !ended || blocked || !(more.items || []).length;
-    if (ended && !blocked) loadMore();
 
     // the message box (never before the live starts, never after it ends)
     const chatOn = settings.chatEnabled !== false;

@@ -1,6 +1,6 @@
 // A small MP4 writer (ISO base media file), used in the browser for two jobs:
 //   - taking the sound out of an MP4 video without re-encoding it (an .m4a file), see mp4-audio.js
-//   - putting encoded video + audio into one MP4 (the video made from an audio item), see scene-render.js
+//   - putting encoded video + audio into one MP4 (a video file)
 // The file is written "progressive": the index (moov) comes first, so it starts playing before it is fully loaded.
 // Samples are kept in memory (a 10 minute item is a few tens of MB). No frameworks, no libraries.
 

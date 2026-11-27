@@ -1,17 +1,15 @@
 // The "Screen settings" card (the animated screen) on the page of an audio item:
 //   - switch the animated screen on, choose its background picture, preview any moment, use a frame as the thumbnail
 //   - lyrics: open the timing editor, choose the animation, switch "Show lyrics" on or off
-// videoMaker() is the Make video version button, shown on the video screen: renders the screen + audio into an MP4 (on a computer)
 // The page passes in what it already has (the item, the database helpers), so this file does not import the page.
 import { h, toast, fmtDur } from './ui.js';
 import { drawScene, defaultScene, LYRIC_ANIMS, SCENE_W, SCENE_H } from '../../shared/scene.js';
 import { pickThumbnail } from './thumb-picker.js';
 import { openLyricsEditor } from './lyrics-editor.js';
-import { canRender, renderSceneVideo, MAX_SECONDS } from './scene-render.js';
 
 const wide = window.matchMedia('(min-width: 900px)');
 
-// Shared by the settings panel and the video maker.
+// Helpers for the settings panel.
 function helpers(ctx) {
   const { id, db, now, syncSoon, fetchMedia, changed } = ctx;
   const update = async (patch, republish = false) => {
@@ -26,53 +24,6 @@ function helpers(ctx) {
     return fetchMedia(cur.mediaKey);
   };
   return { update, audioBlob };
-}
-
-// The video screen of an audio item: the button that makes the video, a note, and a progress slot.
-// action is null when this browser cannot make video. start() runs (or cancels) the making, for a menu item.
-export function videoMaker(ctx) {
-  const { id, db, putAlt, changed } = ctx;
-  const item = ctx.item;
-  const { update, audioBlob } = helpers(ctx);
-  const can = wide.matches && canRender();
-  const label = () => (item.altKey ? 'Make the video again' : 'Make video version');
-  const mk = h('button', { class: 'btn small primary', type: 'button' }, label());
-  const prog = h('progress', { max: 100, value: 0, hidden: true });
-  const progText = h('p', { class: 'muted small', hidden: true });
-  const status = h('div', { class: 'vm-status' }, prog, progText);
-  let ctl = null;
-  const start = async () => {
-    if (ctl) { ctl.abort(); return; }
-    const cur = await db.items.get(id);
-    if (!cur.scene) return toast('Turn on the animated screen first.');
-    if ((cur.duration || 0) > MAX_SECONDS + 0.5) return toast('A video can be made for up to 10 minutes of audio.');
-    if (cur.altKey && !confirm('Replace the video version that is already there?')) return;
-    ctl = new AbortController();
-    mk.textContent = 'Cancel';
-    prog.hidden = false; progText.hidden = false;
-    try {
-      const out = await renderSceneVideo({
-        audio: await audioBlob(), title: cur.title, bg: cur.bgBlob || null, lyrics: cur.showLyrics ? (cur.lyrics || null) : null, anim: cur.scene.lyricAnim, signal: ctl.signal,
-        onProgress: (p, l) => { prog.value = Math.round(p * 100); progText.textContent = `${l}… ${Math.round(p * 100)}%`; },
-      });
-      await putAlt(cur, { blob: out.blob, mime: out.mime, ext: 'mp4', duration: out.duration });
-      toast('Video version ready. It uploads with the item.');
-      await changed();
-    } catch (e) { toast(e.message === 'Cancelled.' ? 'Cancelled.' : (e.message || String(e))); }
-    ctl = null;
-    mk.textContent = label();
-    prog.hidden = true; progText.hidden = true;
-  };
-  mk.onclick = start;
-  const turnOn = h('button', { class: 'btn small', type: 'button' }, 'Use the animated screen');
-  turnOn.onclick = () => update({ scene: defaultScene() }, true);
-  let note;
-  let action = null;
-  if (!wide.matches) note = 'Make the video on a laptop. Everything else here works on a phone.';
-  else if (!canRender()) note = 'This browser cannot make video. Use Chrome or Edge on a computer.';
-  else if (!item.scene) { note = 'The video is made from the animated screen. Turn it on first.'; action = turnOn; }
-  else { note = 'Made from the animated screen and the audio, on this computer.'; action = mk; }
-  return { action, note, status, start, ready: can && !!item.scene };
 }
 
 // ctx: { id, item, db, now, syncSoon, fetchMedia, putAlt, changed() }

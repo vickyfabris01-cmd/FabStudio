@@ -1,7 +1,7 @@
 // Fabris Poet home page: an invitation hero, a filter, and the published items as 16:9 cards.
 //  - Hero: a background picture that changes every day (up to 7, uploaded in the Studio), what the site offers, and the
 //    live (now or next) when there is one. People without an account also see one quiet line inviting them to join.
-//  - Filter: All / Poems / Live recap, and (when both exist) All formats / Audio / Video.
+//  - Filter: (when both exist) All formats / Audio / Video.
 //  - Cards: exactly 16:9. They show at a glance whether it is audio or video, how long it is, and read-only counts.
 //    Reacting happens on the item page.
 import { h } from '../shared/dom.js';
@@ -27,7 +27,6 @@ const ICONS = {
 
 const clock = (s) => { s = Math.round(Number(s) || 0); if (!s) return ''; const m = Math.floor(s / 60); const r = s % 60; return `${m}:${String(r).padStart(2, '0')}`; };
 const isVideo = (it) => it.kind === 'video' || /^video\//.test(it.mime || '');
-const isRecap = (it) => !!it.source_live_id || it.kind === 'live';   // made from a live, or an old published replay
 
 function card(it) {
   const video = isVideo(it);
@@ -39,7 +38,6 @@ function card(it) {
   return h('a', { class: 'pcard ' + (video ? 'is-video' : 'is-audio'), href: `/poem/?id=${it.id}`, 'aria-label': `${title}. ${video ? 'Video' : 'Audio'}${len ? ', ' + len : ''}` },
     thumb ? h('img', { class: 'pc-img', src: thumb, alt: '', loading: 'lazy' }) : h('div', { class: 'pc-img ph' }),
     h('span', { class: 'pc-type' }, ic(video ? ICONS.video : ICONS.audio), video ? 'Video' : 'Audio', len ? h('span', { class: 'pc-len' }, ` · ${len}`) : null),
-    isRecap(it) ? h('span', { class: 'pc-tag' }, 'Live recap') : null,
     video ? h('span', { class: 'pc-play', 'aria-hidden': 'true' }, ic(ICONS.play, true)) : null,
     h('div', { class: 'pc-bar' },
       showTitle ? h('div', { class: 'pc-title' }, title) : null,
@@ -47,39 +45,6 @@ function card(it) {
         h('span', { title: 'Views' }, ic(ICONS.eye), String(it.n_views ?? 0)),
         h('span', { title: 'Likes' }, ic(ICONS.like), String(it.n_like ?? 0)),
         h('span', { title: 'Comments' }, ic(ICONS.comment), String(it.n_comments ?? 0)))));
-}
-
-// The parts of one live's recap are shown as ONE album card that looks like a stack (more underneath).
-// It opens the first part; the item page lists the parts and plays them one after the other, then starts again.
-function albumCard(parts) {
-  const sorted = parts.slice().sort((a, b) => (a.album_pos ?? 1e9) - (b.album_pos ?? 1e9) || Date.parse(a.published_at) - Date.parse(b.published_at));
-  const first = sorted[0];
-  const thumb = first.public_thumb_key ? mediaUrl(first.public_thumb_key) : '';
-  const total = clock(sorted.reduce((n, x) => n + (Number(x.duration) || 0), 0));
-  const sum = (k) => sorted.reduce((n, x) => n + (Number(x[k]) || 0), 0);
-  const title = first.album_title || 'Live recap';
-  return h('div', { class: 'album-card' },
-    h('a', { class: 'pcard is-audio is-album', href: `/poem/?id=${first.id}`, 'aria-label': `${title}. Album, ${sorted.length} part${sorted.length === 1 ? '' : 's'}${total ? ', ' + total : ''}` },
-      thumb ? h('img', { class: 'pc-img', src: thumb, alt: '', loading: 'lazy' }) : h('div', { class: 'pc-img ph' }),
-      h('span', { class: 'pc-type' }, ic(ICONS.audio), `Album · ${sorted.length} part${sorted.length === 1 ? '' : 's'}`, total ? h('span', { class: 'pc-len' }, ` · ${total}`) : null),
-      h('span', { class: 'pc-tag' }, 'Live recap'),
-      h('div', { class: 'pc-bar' },
-        h('div', { class: 'pc-title' }, title),
-        h('div', { class: 'pc-stats' },
-          h('span', { title: 'Views' }, ic(ICONS.eye), String(sum('n_views'))),
-          h('span', { title: 'Likes' }, ic(ICONS.like), String(sum('n_like'))),
-          h('span', { title: 'Comments' }, ic(ICONS.comment), String(sum('n_comments')))))));
-}
-function cardsFor(rows) {
-  const out = [];
-  const seen = new Set();
-  for (const it of rows) {
-    if (!it.source_live_id) { out.push(card(it)); continue; }
-    if (seen.has(it.source_live_id)) continue;
-    seen.add(it.source_live_id);
-    out.push(albumCard(rows.filter((x) => x.source_live_id === it.source_live_id)));
-  }
-  return out;
 }
 
 // The hero picture of the day: every visitor sees the same one, and it changes at midnight in Nairobi.
@@ -118,17 +83,13 @@ function buildHeroActions() {
 
 function buildFilters(items, onChange) {
   const box = document.getElementById('filters');
-  const state = { cat: 'all', fmt: 'all' };
-  const hasRecap = items.some(isRecap);
+  const state = { fmt: 'all' };
   const hasVideo = items.some(isVideo); const hasAudio = items.some((i) => !isVideo(i));
-  const cats = [['all', 'All'], ['poems', 'Poems'], ['recap', 'Live recap']].filter(([k]) => k !== 'recap' || hasRecap);
   const fmts = hasVideo && hasAudio ? [['all', 'All formats'], ['audio', 'Audio'], ['video', 'Video']] : [];
-  if (cats.length < 2 && !fmts.length) return state;
-  const chip = (group, k, label) => h('button', { class: 'fchip', type: 'button', 'aria-pressed': String(state[group] === k), onclick: () => { state[group] = k; paint(); onChange(); } }, label);
+  if (!fmts.length) return state;
+  const chip = (k, label) => h('button', { class: 'fchip', type: 'button', 'aria-pressed': String(state.fmt === k), onclick: () => { state.fmt = k; paint(); onChange(); } }, label);
   function paint() {
-    box.replaceChildren(
-      h('div', { class: 'frow' }, ...cats.map(([k, l]) => chip('cat', k, l))),
-      fmts.length ? h('div', { class: 'frow fmt' }, ...fmts.map(([k, l]) => chip('fmt', k, l))) : null);
+    box.replaceChildren(h('div', { class: 'frow fmt' }, ...fmts.map(([k, l]) => chip(k, l))));
     box.hidden = false;
   }
   paint();
@@ -144,8 +105,8 @@ async function main() {
   try {
     const items = await listItems();
     const draw = () => {
-      const rows = items.filter((it) => (f.cat === 'all' || (f.cat === 'recap' ? isRecap(it) : !isRecap(it))) && (f.fmt === 'all' || (f.fmt === 'video' ? isVideo(it) : !isVideo(it))));
-      grid.replaceChildren(...(rows.length ? cardsFor(rows) : [h('p', { class: 'empty' }, items.length ? 'Nothing here yet.' : 'The first poem is on its way.')]));
+      const rows = items.filter((it) => f.fmt === 'all' || (f.fmt === 'video' ? isVideo(it) : !isVideo(it)));
+      grid.replaceChildren(...(rows.length ? rows.map(card) : [h('p', { class: 'empty' }, items.length ? 'Nothing here yet.' : 'The first poem is on its way.')]));
     };
     const f = buildFilters(items, draw);
     draw();

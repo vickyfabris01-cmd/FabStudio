@@ -622,17 +622,16 @@ async function freeSpace() {
   toast(`Freed ${n} file${n === 1 ? '' : 's'}. They are still in the cloud.`);
 }
 
-// Once, after migrations 007 and 008 are run: tell the server which posts have a drawn title card (the home page then
-// does not repeat their title) and which posts were made from a live recap (so they show under "Live recap").
+// Once, after migration 008 is run: tell the server which posts have a drawn title card (the home page then
+// does not repeat their title).
 async function backfillColumns() {
   try {
     if (!navigator.onLine || localStorage.getItem('fabstudio.backfill.v2')) return;
-    const probe = await sb.from('published_items').select('thumb_kind,source_live_id').limit(1);
+    const probe = await sb.from('published_items').select('thumb_kind').limit(1);
     if (probe.error) return;   // the migrations are not run yet: try again next time
     await db.items.toCollection().modify((r) => {
       let touch = false;
       if (r.remote && r.thumbKind) touch = true;
-      if (r.liveId && !r.sourceLiveId) { r.sourceLiveId = r.liveId; touch = true; }
       if (touch) { r.dirty = 1; r.updatedAt = now(); }
     });
     localStorage.setItem('fabstudio.backfill.v2', '1');

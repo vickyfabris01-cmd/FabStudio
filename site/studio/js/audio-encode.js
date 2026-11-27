@@ -1,5 +1,5 @@
 // AAC encoding in the browser (WebCodecs), used to turn a live recording (WebM/Opus, which many iPhones cannot
-// play) into an .m4a, and by scene-render.js for the sound of a video. Runs on the computer, nothing is uploaded.
+// play) into an .m4a, and for the sound of a video file. Runs on the computer, nothing is uploaded.
 import { Mp4Writer } from './mp4-mux.js';
 
 export const SR = 48000;

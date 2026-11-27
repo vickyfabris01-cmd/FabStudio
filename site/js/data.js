@@ -21,24 +21,10 @@ export const listItems = () => withYouTube((media) => media(sbp.from('items_publ
 
 // The pictures for the home page hero (slot 1 to 7). Empty when none were uploaded or migration 008 is not run yet.
 export const listHero = async () => { try { return await must(sbp.from('hero_images').select('slot,key,updated_at').order('slot')); } catch { return []; } };
-// The parts of one live's album (recap parts), in order.
-export const albumParts = (liveId) => must(sbp.from('items_public').select('id,title,album_title,album_pos,duration,public_thumb_key').eq('source_live_id', liveId).order('album_pos', { ascending: true }).limit(60));
 export const getItem = (id) => must(sbp.from('items_public').select('*').eq('id', id).maybeSingle());
 // The latest poems other than this one, for "More from Fabris".
 export const listMore = (excludeId) =>
   withYouTube((media) => media(sbp.from('items_public').select('id,title,public_thumb_key').neq('id', excludeId)).order('published_at', { ascending: false }).limit(4));
-// Four random regular posts for "More from Fabris" on a live that has ended. Posts made from a live recap and
-// live replays are left out. Picked fresh on every visit. (Before migration 007 there is no source_live_id column
-// and so no recap posts to leave out, which is why the second try drops that filter.)
-export async function listRandomPosts(excludeId, n = 4) {
-  const base = (media) => media(sbp.from('items_public').select('id,title,public_thumb_key,n_views,n_like,n_comments').neq('id', excludeId).neq('kind', 'live'))
-    .order('published_at', { ascending: false }).limit(200);
-  let rows;
-  try { rows = await withYouTube((media) => base(media).is('source_live_id', null)); } catch { rows = await withYouTube((media) => base(media)); }
-  rows = [...(rows || [])];
-  for (let i = rows.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rows[i], rows[j]] = [rows[j], rows[i]]; }
-  return rows.slice(0, n);
-}
 export const listComments = (id) =>
   must(sbp.from('comments').select('id,user_id,nickname,body,created_at').eq('item_id', id).order('created_at', { ascending: false }).limit(100));
 

@@ -210,17 +210,13 @@ async function main() {
   const sceneOn = item.kind === 'audio' && item.scene;
   const lyricLines = sceneOn && Array.isArray(item.lyrics) && item.lyrics.length ? item.lyrics : null;
 
-  // The album of this item (the parts of one live's recap), in order. Empty for ordinary items.
-  let parts = [];
-  if (item.source_live_id) { try { parts = await data.albumParts(item.source_live_id); } catch { parts = []; } }
-  const partIx = parts.findIndex((x) => x.id === id);
-  const nextPart = () => (parts.length ? parts[(partIx + 1) % parts.length] : null);
-  const prevPart = () => (parts.length ? parts[(partIx - 1 + parts.length) % parts.length] : null);
-  const goPart = (x) => { if (!x) return; if (x.id === id) { const m = player.media(); m.currentTime = 0; m.play().catch(() => {}); } else location.assign(`/poem/?id=${x.id}&play=1`); };
-
-  const player = item.youtube_id ? youtubePlayer(item, { thumbUrl: thumb, isMember, requireAuth }) : buildPlayer();   // a post from YouTube plays in YouTube's player
+  // A post that only comes from YouTube plays in YouTube's player. An item with its own audio can also have a YouTube
+  // video: that is its Watch side, and Listen plays the audio file.
+  const ytOnlyPost = !!item.youtube_id && !item.public_media_key;
+  const ytWatch = !!item.youtube_id && !!audioUrl && !videoUrl ? item.youtube_id : '';
+  const player = ytOnlyPost ? youtubePlayer(item, { thumbUrl: thumb, isMember, requireAuth }) : buildPlayer();
   function buildPlayer() {
-    const both = !!(audioUrl && videoUrl);
+    const both = !!(audioUrl && (videoUrl || ytWatch));
     const KEY = 'fp.mode';
     let saved = null;
     try { saved = localStorage.getItem(KEY); } catch { /* private mode */ }
@@ -238,21 +234,25 @@ async function main() {
           if (s) m.play().catch(() => toast('You are signed in. Tap play to start.'));
         });
       });
-      m.addEventListener('ended', () => { if (parts.length) goPart(nextPart()); });
       m.addEventListener('play', () => {
         if (!('mediaSession' in navigator)) return;
         try {
-          navigator.mediaSession.metadata = new MediaMetadata({ title: item.title, artist: 'Fabris Poet', album: item.album_title || '', artwork: thumb ? [{ src: thumb, sizes: '1280x720', type: 'image/jpeg' }] : [] });
+          navigator.mediaSession.metadata = new MediaMetadata({ title: item.title, artist: 'Fabris Poet', artwork: thumb ? [{ src: thumb, sizes: '1280x720', type: 'image/jpeg' }] : [] });
           navigator.mediaSession.setActionHandler('play', () => m.play());
           navigator.mediaSession.setActionHandler('pause', () => m.pause());
           navigator.mediaSession.setActionHandler('seekto', (d) => { m.currentTime = d.seekTime; });
-          navigator.mediaSession.setActionHandler('previoustrack', parts.length > 1 ? () => goPart(prevPart()) : null);
-          navigator.mediaSession.setActionHandler('nexttrack', parts.length > 1 ? () => goPart(nextPart()) : null);
         } catch { /* lock screen controls are optional */ }
       });
     };
     const mount = (m, at = 0, resume = false) => {
       let media;
+      if (m === 'watch' && ytWatch) {
+        // the linked YouTube video: it starts where the listener was (YouTube cannot give its position back)
+        const yp = youtubePlayer(item, { thumbUrl: thumb, isMember, requireAuth, start: at, now: resume, note: false });
+        slot.replaceChildren(yp.el);
+        cur = { media: null, mode: 'watch' };
+        return;
+      }
       if (m === 'watch') {
         media = h('video', { class: 'player', controls: true, playsinline: true, preload: 'metadata', poster: thumb, src: videoUrl });
         slot.replaceChildren(media);
@@ -272,9 +272,9 @@ async function main() {
     if (both) {
       const mk = (m, label) => h('button', { class: 'mode', type: 'button', 'aria-pressed': String(mode === m), onclick: () => {
         if (cur.mode === m) return;
-        const at = cur.media.currentTime || 0;
-        const was = !cur.media.paused;
-        cur.media.pause();
+        const at = cur.media ? cur.media.currentTime || 0 : 0;
+        const was = cur.media ? !cur.media.paused : false;
+        cur.media?.pause();
         mode = m;
         try { localStorage.setItem(KEY, m); } catch { /* ignore */ }
         mount(m, at, was);
@@ -283,15 +283,9 @@ async function main() {
       const btns = [['listen', mk('listen', 'Listen')], ['watch', mk('watch', 'Watch')]];
       el.append(h('div', { class: 'modes', role: 'group', 'aria-label': 'Listen or watch' }, btns.map((x) => x[1])));
     }
-    return { el, media: () => cur.media, play: () => cur.media.play() };
+    return { el, media: () => cur.media, play: () => (cur.media ? cur.media.play() : Promise.resolve()) };
   }
   const media = player.el;
-  // Coming from the previous part of an album: carry on playing (if the browser blocks it, one tap does).
-  if (new URLSearchParams(location.search).get('play') === '1') {
-    const tryPlay = () => player.play().catch(() => { toast('Tap play to carry on with the album.'); });
-    setTimeout(tryPlay, 250);
-  }
-
   /* Like and the comment button */
   let mine = new Set();
   const nLike = h('span', { class: 'n' }, '0');
@@ -442,25 +436,17 @@ async function main() {
     document.addEventListener('keydown', onKey);
     document.body.append(wrap);
   }
-  const dlBtn = item.allow_download === false || item.youtube_id ? null
+  const dlBtn = item.allow_download === false || ytOnlyPost ? null
     : h('button', { class: 'react dl', type: 'button', 'aria-label': 'Download', title: 'Download', onclick: openDownload }, icon('download'));
 
   const titleText = h('h1', {}, item.title);
   const titleBox = h('div', { class: 'ttl' }, titleText);
   const description = (item.description || '').trim() ? descBlock(item.description.trim()) : null;
 
-  // The album: this item is one part of a live's recap. The strip lists the parts; the album loops.
-  const albumEl = parts.length ? h('section', { class: 'album', 'aria-label': 'Album' },
-    h('div', { class: 'album-head' }, h('span', { class: 'album-tag' }, 'Album'), h('strong', {}, item.album_title || 'Live recap'), h('span', { class: 'muted small' }, ` · ${parts.length} part${parts.length === 1 ? '' : 's'} · plays on, then starts again`)),
-    h('ol', { class: 'album-list' }, parts.map((x, i) => h('li', { class: x.id === id ? 'now' : '' },
-      h('a', { href: `/poem/?id=${x.id}${x.id === id ? '' : '&play=1'}`, 'aria-current': x.id === id ? 'true' : null },
-        h('span', { class: 'n' }, String(i + 1)), h('span', { class: 't' }, x.title), h('span', { class: 'muted small' }, fmtDur(x.duration))))))) : null;
-
   // Native replaceChildren() would print a missing item as the word "null", so only real items go in.
   root.replaceChildren(...[
     titleBox,
     media,
-    albumEl,
     h('p', { class: 'meta' }, fmtAgo(item.published_at), ' · ', views),
     description ? description.el : null,
     h('div', { class: 'reacts', role: 'group', 'aria-label': 'Reactions and comments' }, [likeBtn, comBtn, dlBtn, shareBtn].filter(Boolean)),

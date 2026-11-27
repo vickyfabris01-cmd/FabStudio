@@ -1,25 +1,22 @@
-// The recap: what you do with the recording after a live.
+// The recap: what you do with the recording after a live. Nothing is published from here.
 //  - SEGMENTS: a segment runs from one timestamp to the next (the first from 0:00, the last to the end).
-//    Each one has its own play button (only one plays at a time) and its own Publish button.
-//  - JOIN: tick two or more segments and press "Join & publish" (they need not be next to each other).
-//  - Everything published from here is a NEW post with its own, fresh numbers. The live keeps its own stats.
-//  - A post is at most 10 minutes. A longer live is published "in parts" (cut at your timestamps, never over 10 minutes);
-//    all the parts of one live play together as that live's ALBUM (a single part makes an album of one).
+//    Each one has its own play button (only one plays at a time) and its own Download button.
+//  - JOIN: tick two or more segments and press "Join & download" (they need not be next to each other).
+//  - "Download recording" saves the whole recording. Use the files to make a video or a new item elsewhere.
 //  - The waveform is only a picture of the recording (click it to play from that point).
-//  - On the right, read-only: the saved Chats and the Viewers of this live.
-// Cutting and joining happen on this laptop without re-encoding (webm-cut.js), so nothing is downloaded.
+//  - On the right, read-only: the saved Chats and the Viewers of this live. They stay here as the history of the live.
+// Cutting and joining happen on this laptop without re-encoding (webm-cut.js); a cut is then saved as .m4a when this
+// browser can encode AAC, otherwise as the original .webm.
 import { db } from '../db.js';
 import { sb } from '../../../shared/supabase.js';
 import { getBlob } from '../sync.js';
 import { h, toast, probeDuration, eyeIcon, loveIcon } from '../ui.js';
-import { createDraftFromClip, publishItemNow } from '../publish.js';
-import { jobFor, onPublishJobs } from '../publisher.js';
+import { toM4a } from '../audio-encode.js';
+import { downloadName, extOf } from '../../../shared/dl-name.js';
 import { indexWebm, cutWebm, frameSizes } from './webm-cut.js';
-import { thumbField } from '../thumb-picker.js';
 
 const C = { accent: '#86c4ad', pick: '#4f8a75', rec: '#e5736a', line: '#2e2a3a', muted: '#9a93a8', text: '#ebe5d8', bg: '#14121a' };
 const WAVE_H = 72;
-const MAX_PART = 600;   // seconds: the longest a published post can be
 
 export const clock = (s) => {
   s = Math.max(0, Math.round(s));
@@ -89,29 +86,25 @@ export async function recapPane(opts) {
   const { engine, itemId, cap } = opts;
   const total = Math.max(1, cap?.duration || 1);
   const st = {
-    blob: null, index: null, peaks: [], busy: false, uploaded: false, published: false,
+    blob: null, index: null, peaks: [], busy: false, uploaded: false,
     head: 0,                 // the playhead when nothing plays (where "+ Timestamp" goes)
     playing: null,           // { i, start, end } while a segment plays
     sel: new Set(),          // ticked segments (their start times)
-    open: null,              // the segment whose publish form is open (its start time)
-    joinTitle: '', joinEdited: false, wholeOpen: false,
-    fields: new Map(),       // per open form: its title and its thumbnail field, kept while the list is redrawn
-    segKey: '', clipKey: '', panelKey: '', tab: 'chats',
+    segKey: '', panelKey: '', tab: 'chats',
     saved: null, savedAt: 0, loading: false,
   };
   let audio = null; let url = null; let raf = 0; let dead = false;
   const liveTitle = () => engine.s.row?.title || opts.title;
   const hostName = () => engine.s.row?.settings?.hostName || '';
 
-  /* ----- header: title, the numbers of this live, and "Publish whole recap" ----- */
+  /* ----- header: title, the numbers of this live, and "Download recording" ----- */
   const note = h('p', { class: 'small muted' });
   const stat = (icon, label) => { const v = h('b', {}, '–'); return { v, el: h('span', { class: 'rc-st', title: label }, icon, v, h('span', { class: 'rc-stl' }, label)) }; };
   const sViews = stat(eyeIcon(14), 'Views'); const sPeak = stat(h('span', { class: 'stat-live', 'aria-hidden': 'true' }), 'Peak watching'); const sLove = stat(loveIcon(14), 'Love');
   sLove.el.classList.add('is-love');
-  const whole = h('button', { class: 'btn primary small', type: 'button' }, total > MAX_PART + 0.5 ? 'Publish in parts' : 'Publish whole recap');
+  const whole = h('button', { class: 'btn primary small', type: 'button' }, 'Download recording');
   const head = h('div', { class: 'row rc-top' }, h('div', { class: 'grow' }, h('h3', {}, `${opts.title} · Recap`), note), h('div', { class: 'rc-stats' }, sViews.el, sPeak.el, sLove.el), whole);
-  const wholeForm = h('div', { class: 'rc-form', hidden: true });
-
+  
   /* ----- waveform (a picture; click it to play from there) ----- */
   const canvas = h('canvas', { class: 'rc-wave', height: WAVE_H, 'aria-label': 'Recording waveform. Click a point to play the segment from there.' });
   const timeEl = h('span', { class: 'small muted rc-time' });
@@ -203,102 +196,37 @@ export async function recapPane(opts) {
   const addMark = h('button', { class: 'btn small', type: 'button' }, '+ Timestamp at playhead');
   addMark.onclick = () => saveMarks([...engine.s.markers, { t: Math.round(now()), label: 'Timestamp', kind: 'dead moment' }]);
 
-  /* ----- publishing: the inline form, used for one segment, for several joined ones and for the whole recap ----- */
+  /* ----- downloading: one segment, several joined ones, or the whole recording. Nothing is published. ----- */
   const msg = h('p', { class: 'small rc-msg' });
-  async function publishRanges(title, ranges, what, tf) {
+  const saveFile = (blob, title, ext) => {
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: downloadName(title, ext) });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+  const recordingExt = () => extOf({ key: cap?.r2Key || '', mime: st.blob?.type || cap?.mime || '' });
+  // ranges: [[startSecond, endSecond], ...] cut out of the recording and joined in order. Returns true when the file was saved.
+  async function downloadRanges(title, ranges, what) {
     if (st.busy) return false;
-    title = String(title || '').trim();
-    if (!title) { msg.className = 'small error rc-msg'; msg.textContent = 'Give it a title.'; return false; }
     st.busy = true; msg.className = 'small rc-msg'; msg.textContent = 'Cutting…';
     try {
       if (!st.blob) throw new Error('The recording is not on this device.');
-      let blob = st.blob; let seconds = total;
-      if (!ranges && total > MAX_PART + 0.5) throw new Error('A post can be at most 10 minutes. Use "Publish in parts".');
-      if (ranges && ranges.reduce((n, [a, b]) => n + (b - a), 0) > MAX_PART + 0.5) throw new Error('A post can be at most 10 minutes. Pick a shorter range, or add a timestamp to split it.');
-      if (ranges) {
-        if (ranges.some(([a, b]) => b - a < 1)) throw new Error('Every part must be at least a second long.');
-        st.index ||= await indexWebm(st.blob);
-        const cut = cutWebm(st.index, ranges.map(([a, b]) => [a * 1000, b * 1000]));
-        if (!(await probeDuration(cut.blob))) throw new Error('The cut did not produce playable audio.');
-        blob = cut.blob; seconds = cut.durationMs / 1000;
-      }
-      const t = tf ? await tf.get() : null;   // the thumbnail picked for this post, or a title card
-      const id = await createDraftFromClip({ liveId: itemId, title, blob, duration: seconds, thumb: t?.blob, thumbKind: t?.kind, thumbLook: t?.look || 0, albumTitle: liveTitle(), albumPos: ranges ? ranges[0][0] : 0 });
-      publishItemNow(id, title).then(() => paintClips(true), () => paintClips(true));
-      msg.textContent = `${what} "${title}" is on its way (${clock(seconds)}). It is a new post with fresh numbers.`;
-      toast('Queued for publishing.');
-      paintClips(true);
-      st.busy = false;
+      if (ranges.some(([a, b]) => b - a < 1)) throw new Error('Every part must be at least a second long.');
+      st.index ||= await indexWebm(st.blob);
+      const cut = cutWebm(st.index, ranges.map(([a, b]) => [a * 1000, b * 1000]));
+      if (!(await probeDuration(cut.blob))) throw new Error('The cut did not produce playable audio.');
+      let blob = cut.blob; let ext = 'webm';
+      try { const m = await toM4a(blob); if (m) { blob = m.blob; ext = 'm4a'; } } catch (e) { console.warn('Kept the original audio format', e); }
+      saveFile(blob, title, ext);
+      msg.textContent = `${what} saved to your downloads (${clock(cut.durationMs / 1000)}).`;
+      st.busy = false; paintSegs(true);
       return true;
-    } catch (e) { msg.className = 'small error rc-msg'; msg.textContent = e.message || String(e); st.busy = false; return false; }
-  }
-
-  // One shared record per open form (its title and its thumbnail field), so redrawing the list never loses what was typed or picked.
-  const fieldFor = (key, def) => {
-    if (!st.fields.has(key)) { const rec = { title: def }; rec.tf = thumbField({ getTitle: () => rec.title }); st.fields.set(key, rec); }
-    return st.fields.get(key);
-  };
-  function formFor({ key, value, label, onGo, onCancel }) {
-    const rec = fieldFor(key, value);
-    const input = h('input', { value: rec.title, maxlength: 120, 'aria-label': 'Title' });
-    let t = 0;
-    input.oninput = () => { rec.title = input.value; clearTimeout(t); t = setTimeout(() => rec.tf.refresh(), 400); };
-    const go = h('button', { class: 'btn primary small', type: 'button' }, label);
-    const close = () => { st.fields.delete(key); onCancel(); };
-    go.onclick = async () => { go.disabled = true; const ok = await onGo(input.value, rec.tf); go.disabled = false; if (ok) close(); };
-    input.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
-    return { input, el: h('div', { class: 'rc-formbox' }, h('div', { class: 'row rc-formrow' }, h('div', { class: 'grow' }, input), go, h('button', { class: 'btn small', type: 'button', onclick: close }, 'Cancel')), rec.tf.el) };
-  }
-
-  // A live longer than 10 minutes: proposes parts (cut at your timestamps, each at most 10 minutes) and publishes them all.
-  function proposeParts() {
-    const parts = [];
-    let cur = null;
-    const flush = () => { if (cur && cur.end - cur.start >= 1) parts.push(cur); cur = null; };
-    for (const s of segments()) {
-      const len = s.end - s.start;
-      if (len > MAX_PART) {                                  // too long for one post: cut it into equal pieces
-        flush();
-        const n = Math.ceil(len / MAX_PART);
-        for (let k = 0; k < n; k++) parts.push({ start: s.start + (len * k) / n, end: s.start + (len * (k + 1)) / n });
-      } else if (cur && cur.end === s.start && cur.end - cur.start + len <= MAX_PART) cur.end = s.end;
-      else { flush(); cur = { start: s.start, end: s.end }; }
-    }
-    flush();
-    return parts.map((p) => ({ start: Math.round(p.start * 10) / 10, end: Math.round(p.end * 10) / 10 }));
-  }
-  function partsForm() {
-    const parts = proposeParts();
-    const titles = parts.map((_, i) => `${liveTitle()} · Part ${i + 1}`);
-    const rows = parts.map((p, i) => {
-      const input = h('input', { value: titles[i], maxlength: 120, 'aria-label': `Title of part ${i + 1}` });
-      input.oninput = () => { titles[i] = input.value; };
-      return h('div', { class: 'row rc-formrow' }, h('span', { class: 'small muted' }, `${clock(p.start)} – ${clock(p.end)} · ${clock(p.end - p.start)}`), h('div', { class: 'grow' }, input));
-    });
-    const go = h('button', { class: 'btn primary small', type: 'button' }, `Publish ${parts.length} part${parts.length === 1 ? '' : 's'}`);
-    go.onclick = async () => {
-      go.disabled = true;
-      let done = 0;
-      for (let i = 0; i < parts.length; i++) {
-        msg.className = 'small rc-msg'; msg.textContent = `Part ${i + 1} of ${parts.length}…`;
-        const ok = await publishRanges(titles[i], [[parts[i].start, parts[i].end]], `Part ${i + 1}`, null);
-        if (!ok) break;
-        done++;
-      }
-      go.disabled = false;
-      if (done === parts.length) { st.wholeOpen = false; wholeForm.hidden = true; msg.textContent = `All ${done} parts are on their way. They play together as the album "${liveTitle()}".`; }
-    };
-    wholeForm.replaceChildren(
-      h('p', { class: 'small muted' }, `This live is ${clock(total)} long, and a post can be at most 10 minutes. These parts are cut at your timestamps. They become one album named after the live, and play on from one to the next. You can rename each part.`),
-      ...rows, h('div', { class: 'row rc-formrow' }, go, h('button', { class: 'btn small', type: 'button', onclick: () => { st.wholeOpen = false; wholeForm.hidden = true; } }, 'Cancel')));
+    } catch (e) { msg.className = 'small error rc-msg'; msg.textContent = e.message || String(e); st.busy = false; paintSegs(true); return false; }
   }
   whole.onclick = () => {
-    if (st.wholeOpen) { st.wholeOpen = false; wholeForm.hidden = true; return; }
-    if (total > MAX_PART + 0.5) { st.wholeOpen = true; wholeForm.hidden = false; partsForm(); return; }
-    st.wholeOpen = true; wholeForm.hidden = false;
-    const f = formFor({ key: 'whole', value: `${liveTitle()} · full recap`, label: 'Publish', onGo: (t, tf) => publishRanges(t, null, 'Recap', tf), onCancel: () => { st.wholeOpen = false; wholeForm.hidden = true; } });
-    wholeForm.replaceChildren(h('p', { class: 'small muted' }, 'This makes a NEW post from the whole recording. The live keeps its own numbers.'), f.el);
-    f.input.focus(); f.input.select();
+    if (!st.blob) return toast('The recording is not on this device.');
+    saveFile(st.blob, `${liveTitle()} · recording`, recordingExt());
+    msg.className = 'small rc-msg'; msg.textContent = `The whole recording (${clock(total)}) is saved to your downloads.`;
   };
 
   /* ----- the segment list ----- */
@@ -310,7 +238,7 @@ export async function recapPane(opts) {
     const segs = segments();
     // ticks that no longer match a segment are dropped
     for (const t of [...st.sel]) if (!segs.some((s) => s.start === t)) st.sel.delete(t);
-    const key = JSON.stringify([segs.map((s) => [s.start, s.end, s.label, s.kind]), [...st.sel], st.open, st.playing?.i ?? -1, st.busy]);
+    const key = JSON.stringify([segs.map((s) => [s.start, s.end, s.label, s.kind]), [...st.sel], st.playing?.i ?? -1, st.busy]);
     if (!force && key === st.segKey) return;
     if (!force && segsBox.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;   // never redraw under the person's typing
     st.segKey = key;
@@ -325,70 +253,33 @@ export async function recapPane(opts) {
         name = h('input', { class: 'inline rc-mname', value: s.label, maxlength: 80, 'aria-label': 'Timestamp name' });
         name.onchange = () => saveMarks(engine.s.markers.map((m) => (m === s.marker ? { ...m, label: name.value.trim() || 'Timestamp' } : m)));
       }
-      const pub = h('button', { class: 'btn small', type: 'button', disabled: len < 1 || st.busy, onclick: () => { if (st.open === s.start) st.fields.delete(`seg:${s.start}`); st.open = st.open === s.start ? null : s.start; paintSegs(true); } }, 'Publish');
+      const pub = h('button', { class: 'btn small', type: 'button', disabled: len < 1 || st.busy, onclick: () => downloadRanges(segTitle(s), [[s.start, s.end]], 'Segment') }, 'Download');
       const del = s.implicit ? h('span', { class: 'rc-delgap' }) : h('button', { class: 'lnk', type: 'button', title: 'Delete this timestamp (the segment joins the one before it)', 'aria-label': 'Delete timestamp', onclick: () => saveMarks(engine.s.markers.filter((m) => m !== s.marker)) }, '✕');
       const row = h('div', { class: 'rc-seg' + (playing ? ' playing' : '') },
         h('div', { class: 'row rc-segrow' }, tick, play,
           h('div', { class: 'rc-segt' }, h('b', {}, clock(s.start)), h('span', { class: 'muted small' }, ` – ${clock(s.end)} · ${clock(len)}`)),
           h('div', { class: 'grow' }, name), pub, del));
-      if (st.open === s.start) {
-        const f = formFor({ key: `seg:${s.start}`, value: segTitle(s), label: 'Publish', onGo: (t, tf) => publishRanges(t, [[s.start, s.end]], 'Segment', tf), onCancel: () => { st.open = null; paintSegs(true); } });
-        row.append(f.el);
-        setTimeout(() => { f.input.focus(); f.input.select(); }, 0);
-      }
       return row;
     });
     segsBox.replaceChildren(...(rows.length ? rows : [h('p', { class: 'small muted' }, 'No segments yet.')]));
     paintJoin(segs);
   }
 
-  // Join: two or more ticked segments become one new post, in the order they appear in the recording.
+  // Join: two or more ticked segments are saved as one file, in the order they appear in the recording.
   function paintJoin(segs) {
     const picked = segs.filter((s) => st.sel.has(s.start));
     joinBar.hidden = picked.length < 2;
-    if (picked.length < 2) { st.joinEdited = false; return; }
-    const auto = `${liveTitle()} · ${picked.map((s) => s.label).join(' + ')}`;
-    const rec = fieldFor('join', auto);
-    if (!st.joinEdited && rec.title !== auto) { rec.title = auto; rec.tf.refresh(); }
-    const input = h('input', { value: rec.title, maxlength: 120, 'aria-label': 'Title for the joined post' });
-    let t = 0;
-    input.oninput = () => { rec.title = input.value; st.joinEdited = true; clearTimeout(t); t = setTimeout(() => rec.tf.refresh(), 400); };
-    const go = h('button', { class: 'btn primary small', type: 'button', disabled: st.busy }, `Join & publish (${picked.length})`);
-    const clear = () => { st.sel.clear(); st.joinEdited = false; st.fields.delete('join'); paintSegs(true); draw(); };
+    if (picked.length < 2) return;
+    const go = h('button', { class: 'btn primary small', type: 'button', disabled: st.busy }, `Join & download (${picked.length})`);
+    const clear = () => { st.sel.clear(); paintSegs(true); draw(); };
     go.onclick = async () => {
       go.disabled = true;
-      const ok = await publishRanges(rec.title, picked.map((s) => [s.start, s.end]), 'Joined clip', rec.tf);
-      if (ok) clear(); else { paintSegs(true); draw(); }
+      const ok = await downloadRanges(`${liveTitle()} · ${picked.map((s) => s.label).join(' + ')}`, picked.map((s) => [s.start, s.end]), 'Joined clip');
+      if (ok) clear();
     };
-    joinBar.replaceChildren(h('div', { class: 'small muted' }, `Joined in recording order, no re-encoding. There may be a faint click where two parts meet.`),
-      h('div', { class: 'row rc-formrow' }, h('div', { class: 'grow' }, input), go, h('button', { class: 'btn small', type: 'button', onclick: clear }, 'Clear')), rec.tf.el);
+    joinBar.replaceChildren(h('div', { class: 'small muted' }, 'Joined in recording order. There may be a faint click where two parts meet.'),
+      h('div', { class: 'row rc-formrow' }, go, h('button', { class: 'btn small', type: 'button', onclick: clear }, 'Clear')));
   }
-
-  /* ----- posts made from this recap ----- */
-  const clipsBox = h('div', { class: 'rc-clips' });
-  const clipsSum = h('summary', {}, 'Published from this recap');
-  const clipsWrap = h('details', { class: 'rc-done' }, clipsSum, clipsBox);
-  async function paintClips(force) {
-    const rows = (await db.items.filter((x) => x.liveId === itemId).toArray()).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-    const stateOf = (r) => {
-      const j = jobFor(r.id);
-      if (r.status === 'published') return 'Published';
-      if (j && ['queued', 'running', 'waiting'].includes(j.state)) return `${j.label}${j.pct ? ` ${j.pct}%` : ''}`;
-      if (j && j.state === 'error') return `Failed: ${j.error}`;
-      return 'Draft';
-    };
-    const key = rows.map((r) => `${r.id}:${stateOf(r)}`).join('|');
-    if (!force && key === st.clipKey) return;
-    st.clipKey = key;
-    clipsSum.textContent = `Published from this recap (${rows.length})`;
-    clipsBox.replaceChildren(...(rows.length ? rows.map((r) => {
-      const s = stateOf(r);
-      return h('div', { class: 'rc-clipitem' }, h('span', { class: 'grow' }, r.title), h('span', { class: 'small muted' }, clock(r.duration || 0)),
-        h('span', { class: 'small ' + (s.startsWith('Failed') ? 'error' : s === 'Published' ? '' : 'muted') }, s),
-        s === 'Draft' || s.startsWith('Failed') ? h('button', { class: 'lnk', type: 'button', onclick: () => { publishItemNow(r.id, r.title).then(() => paintClips(true), () => paintClips(true)); paintClips(true); } }, 'Retry') : null);
-    }) : [h('p', { class: 'small muted' }, 'Nothing yet.')]));
-  }
-  const offJobs = onPublishJobs(() => paintClips());
 
   /* ----- the right side: Chats | Viewers, read only ----- */
   const tabChats = h('button', { class: 'tab on', type: 'button' }, 'Chats');
@@ -441,22 +332,21 @@ export async function recapPane(opts) {
   async function checkState(force) {
     if (!force && Date.now() - lastCheck < 15000) return;
     lastCheck = Date.now();
-    try { st.published = await opts.published(); } catch { /* keep the last answer */ }
     const fresh = cap ? await db.captures.get(cap.id) : null;
     st.uploaded = !!(fresh && fresh.status === 'done' && !fresh.blobPending);
     note.textContent = !cap ? 'No recording was made on this device for this live.'
-      : `${st.uploaded ? 'Saved to your private storage' : fresh?.status !== 'done' ? 'Finishing the recording…' : 'Uploading to your private storage. Keep the app open and online.'} · ${clock(total)} long${st.published ? ' · The replay of this live was already published the old way and is still online.' : ''}`;
+      : `${st.uploaded ? 'Saved to your private storage' : fresh?.status !== 'done' ? 'Finishing the recording…' : 'Uploading to your private storage. Keep the app open and online.'} · ${clock(total)} long`;
     whole.disabled = !st.blob;
   }
 
-  const el = h('section', { class: 'card c-recap' }, head, wholeForm,
+  const el = h('section', { class: 'card c-recap' }, head,
     h('div', { class: 'rc-main' },
       h('div', { class: 'rc-left' }, wave,
         h('div', { class: 'row rc-listhead' }, h('h4', {}, 'Segments'), h('span', { class: 'grow' }), addMark),
-        segsBox, joinBar, msg, clipsWrap),
+        segsBox, joinBar, msg),
       side));
 
-  function paint() { checkState(false); paintSegs(); paintClips(); refreshSaved(false); paintPanel(); }
+  function paint() { checkState(false); paintSegs(); refreshSaved(false); paintPanel(); }
 
   // the recording itself, and the level history saved while it was recorded
   if (cap) {
@@ -471,8 +361,8 @@ export async function recapPane(opts) {
   if (!st.blob) { whole.disabled = true; msg.textContent = 'The recording is not on this device yet.'; }
   const onResize = () => draw();
   window.addEventListener('resize', onResize);
-  paintSegs(true); await paintClips(true); await checkState(true);
+  paintSegs(true); await checkState(true);
   refreshSaved(true);
   setTimeout(draw, 30);
-  return { el, paint, dispose() { dead = true; cancelAnimationFrame(raf); offJobs(); window.removeEventListener('resize', onResize); if (audio) { audio.pause(); audio = null; } if (url) URL.revokeObjectURL(url); } };
+  return { el, paint, dispose() { dead = true; cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); if (audio) { audio.pause(); audio = null; } if (url) URL.revokeObjectURL(url); } };
 }

@@ -11,9 +11,8 @@ import { pickThumbnail } from './thumb-picker.js';
 import { createSelection, selectBar, tickBox } from './select.js';
 import { downloadName, extOf } from '../../shared/dl-name.js';
 import { extractAudio } from './mp4-audio.js';
-import { scenePanel, videoMaker } from './scene-panel.js';
-import { toM4a } from './audio-encode.js';
-import { youtubeButton, publicUrl } from './youtube.js';
+import { scenePanel } from './scene-panel.js';
+import { youtubeButton, publicUrl, pickYouTubeVideo, youtubeStudioUrl, youtubeThumbUrl } from './youtube.js';
 import { h, fmtDur, fmtSize, fmtDate, fmtAgo, extFor, toast, probeDuration, openModal, popMenu, micIcon, uploadIcon, dotsIcon, eyeIcon, loveIcon, likeIcon, commentIcon, shareIcon, pencilIcon, playIcon, pauseIcon } from './ui.js';
 
 // One place to change the upload limits.
@@ -127,8 +126,28 @@ export async function putAlt(row, { blob, mime, ext, duration }) {
   if (row.altKey && row.altKey !== key && row.remote) { try { await deleteMedia(row.altKey); } catch { /* the old file stays unused */ } }
   await db.items.update(row.id, {
     altBlob: blob, altMime: mime, altKey: key, altPending: 1, altDuration: duration, publicAltKey: null,
+    ...(row.kind === 'audio' && row.youtubeId ? { youtubeId: null } : {}),   // an item has one video: the new file replaces a linked YouTube video
     updatedAt: now(), dirty: 1, ...(row.status === 'published' ? { needsRepublish: 1 } : {}),
   });
+  syncSoon();
+}
+
+// A post that only plays from YouTube (it has no audio or video file of its own).
+export const ytOnly = (r) => !!r.youtubeId && !r.mediaKey && !r.publicMediaKey;
+
+// Links a YouTube video to an audio item: it becomes the item's video, next to the audio. A video file that was
+// uploaded before is replaced, because an item has one video. Returns an error text, or '' when done.
+export async function linkYoutube(id, videoId) {
+  const row = await db.items.get(id);
+  if (!row) return 'That item is gone.';
+  if (row.kind !== 'audio') return 'Only an audio item can have a YouTube video.';
+  if (row.altKey) await removeAlt(id);
+  await db.items.update(id, { youtubeId: videoId, updatedAt: now(), dirty: 1 });
+  syncSoon();
+  return '';
+}
+export async function unlinkYoutube(id) {
+  await db.items.update(id, { youtubeId: null, updatedAt: now(), dirty: 1 });
   syncSoon();
 }
 
@@ -171,25 +190,6 @@ export async function createDraftFromFile(kind, file) {
   // A video also gets its audio version, taken out of the file without re-encoding (about a second).
   if (kind === 'video') Object.assign(row, await audioOfVideo(id, file));
   await db.items.put(row);
-  syncSoon();
-  return id;
-}
-
-// A clip (or the whole recording, or several clips joined) cut from a live recording becomes an ordinary audio
-// item (own title, thumbnail and counters, all starting at zero).
-// liveId remembers which live it came from, so the recap can list its posts (kept on this device).
-// sourceLiveId is the same id saved with the post online, so the public page can leave recap posts out of
-// "More from Fabris".
-// thumb / thumbKind / thumbLook: the thumbnail picked in the recap (a title card is drawn when none was picked).
-// A part of a recap belongs to the album of its live: albumTitle is the live's title and albumPos its place in the
-// recording (the second it starts at), so the parts always play in the order they were said, whatever order they were published in.
-// The recording is WebM/Opus, which many iPhones cannot play, so it is converted to an .m4a first when this browser can encode AAC.
-export async function createDraftFromClip({ liveId, title, blob, duration, thumb, thumbKind = 'title', thumbLook = 0, albumTitle = '', albumPos = null }) {
-  const card = thumb || await thumbFromTitle(title, 'Fabris Poet', thumbLook);
-  const id = crypto.randomUUID();
-  let media = blob;
-  try { const m = await toM4a(blob); if (m) { media = m.blob; duration = m.duration || duration; } } catch (e) { console.warn('Kept the original audio format', e); }
-  await db.items.put({ ...itemRow({ id, kind: 'audio', title, mime: media.type || 'audio/webm', duration, blob: media, thumb: card, thumbKind: thumb ? thumbKind : 'title' }), liveId, sourceLiveId: liveId || null, thumbVariant: thumbLook, ...(liveId ? { albumTitle: albumTitle || title, albumPos: albumPos == null ? null : Math.round(albumPos) } : {}) });
   syncSoon();
   return id;
 }
@@ -309,7 +309,7 @@ function statsEl(c) {
 }
 
 const statusText = (r) => (r.status === 'published'
-  ? `${r.youtubeId ? 'From YouTube · ' : ''}Published · ${fmtAgo(r.publishedAt || r.updatedAt)}`
+  ? `${ytOnly(r) ? 'From YouTube · ' : ''}Published · ${fmtAgo(r.publishedAt || r.updatedAt)}`
   : `${STATUS[r.status] || r.status} · edited ${fmtAgo(r.updatedAt)}${r.dirty ? ' · waiting to sync' : ''}`);
 
 /* ---------- list (the Studio tab) ---------- */
@@ -344,12 +344,13 @@ export async function publishListView(nav) {
         e.stopPropagation();
         popMenu(dots, [
           // a post that plays from YouTube has no file of its own: it opens its public page, and leaves the site with Delete
-          ...(r.youtubeId ? [{ label: 'Open page', onclick: () => window.open(`/poem/?id=${r.id}`, '_blank') }] : [
+          ...(ytOnly(r) ? [{ label: 'Open page', onclick: () => window.open(`/poem/?id=${r.id}`, '_blank') }] : [
             { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
             { label: 'Open', onclick: () => nav.open(r.id) },
             { label: 'Download', onclick: () => act(() => downloadItem(r.id)) },
           ]),
-          ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, ...(r.youtubeId ? [] : [{ label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }])] : []),
+          ...(r.youtubeId ? [{ label: 'Open in YouTube Studio', onclick: () => window.open(youtubeStudioUrl(r.youtubeId), '_blank', 'noopener') }] : []),
+          ...(r.status === 'published' ? [{ label: 'Copy link', onclick: () => copyLink(r.id) }, ...(ytOnly(r) ? [] : [{ label: 'Unpublish', onclick: () => act(() => unpublishFlow(r.id)) }])] : []),
           { label: 'Delete', danger: true, onclick: () => act(() => deleteFlow(r.id)) },
         ]);
       },
@@ -359,7 +360,7 @@ export async function publishListView(nav) {
 
   const rowEl = (r) => {
     const thumb = r.thumbBlob ? withUrl(r.thumbBlob, h('img', { class: 'thumb', alt: '' }))
-      : r.youtubeId && r.publicThumbKey ? h('img', { class: 'thumb', alt: '', src: publicUrl(r.publicThumbKey) }) : h('div', { class: 'thumb ph' });
+      : ytOnly(r) && r.publicThumbKey ? h('img', { class: 'thumb', alt: '', src: publicUrl(r.publicThumbKey) }) : h('div', { class: 'thumb ph' });
     const job = isBusy(r.id) ? jobFor(r.id) : null;
     const failed = jobFor(r.id)?.state === 'error';
     const line = h('div', { class: (failed ? 'sub error' : 'sub') + (r.status === 'published' && !failed ? ' ok' : '') },
@@ -393,7 +394,7 @@ export async function publishListView(nav) {
     }
     const box = picked.on ? tickBox(picked.ids.has(r.id)) : null;
     const li = h('li', { class: 'item' + (picked.on && picked.ids.has(r.id) ? ' picked' : ''), onclick: () => {
-      if (!picked.on) return r.youtubeId ? window.open(`/poem/?id=${r.id}`, '_blank') : nav.open(r.id);
+      if (!picked.on) return ytOnly(r) ? window.open(`/poem/?id=${r.id}`, '_blank') : nav.open(r.id);
       if (picked.ids.has(r.id)) picked.ids.delete(r.id); else picked.ids.add(r.id);
       box.checked = picked.ids.has(r.id); li.classList.toggle('picked', box.checked); selBar.paint();
     } }, box, thumb, body, end);
@@ -742,7 +743,7 @@ async function existingView(first, nav) {
     setThumb();
     paintStatus();
     paintActions();
-    toast(published() ? 'Saved. Update and republish to show it on the public page.' : 'Thumbnail saved.');
+    toast(published() ? 'Saved. Press Update to show it on the public page.' : 'Thumbnail saved.');
   }
   const getPrimaryBlob = async () => {
     const row = await db.items.get(id);
@@ -831,7 +832,7 @@ async function existingView(first, nav) {
   const isAudioItem = () => item.kind === 'audio';
   const screensBox = h('div', { class: 'screens' });
   const sceneBox = h('div', {});   // Screen settings card (audio items only)
-  const sig = () => JSON.stringify([item.altKey, item.altDuration, item.altPending, !!item.scene, item.duration]);
+  const sig = () => JSON.stringify([item.altKey, item.altDuration, item.altPending, !!item.scene, item.duration, item.youtubeId || null]);
   let shown = '';
   async function altChanged() {
     item = await db.items.get(id);
@@ -860,11 +861,41 @@ async function existingView(first, nav) {
     sceneBox.classList.add('flash');
     setTimeout(() => sceneBox.classList.remove('flash'), 1400);
   };
+  // The Video slot of an audio item: pick a video from your YouTube list (it is linked, nothing is copied) or upload an MP4.
+  const pickYoutube = async () => {
+    const others = await db.items.filter((x) => x.youtubeId && x.id !== id).toArray();
+    pickYouTubeVideo({
+      exclude: others.map((x) => x.youtubeId),
+      onPick: (v) => runVersion(async () => {
+        if (item.altKey && !confirm('Replace the uploaded video with this YouTube video?')) return '';
+        const problem = await linkYoutube(id, v.id);
+        if (!problem) toast('Video linked. Listeners can now choose Listen or Watch.');
+        return problem;
+      }),
+    });
+  };
   function paintScreens() {
     players.splice(0).forEach((p) => p.dispose());
     shown = sig();
-    const maker = isAudioItem() ? videoMaker({ id, item, db, now, syncSoon, fetchMedia, putAlt, changed: altChanged }) : null;
+    // The video screen when a YouTube video is linked: its picture (a tap opens it on YouTube), a menu and Open in YouTube Studio.
+    const youtubeScreen = () => {
+      const vid = item.youtubeId;
+      const dots = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Video options' }, dotsIcon(20));
+      dots.onclick = () => popMenu(dots, [
+        { label: 'Pick another YouTube video', onclick: pickYoutube },
+        { label: 'Replace with an MP4 file', onclick: () => runVersion(uploadVersion) },
+        { label: 'Remove video', danger: true, onclick: () => runVersion(async () => { if (!confirm('Remove the linked YouTube video from this item? The video stays on YouTube.')) return ''; await unlinkYoutube(id); return ''; }) },
+      ]);
+      const th = h('button', { class: 'btn small', type: 'button', onclick: editThumb }, 'Edit thumbnail');
+      const studio = h('button', { class: 'btn small', type: 'button', onclick: () => window.open(youtubeStudioUrl(vid), '_blank', 'noopener') }, 'Open in YouTube Studio');
+      return h('div', { class: 'screen' },
+        h('div', { class: 'screen-head' }, h('strong', {}, 'Video'), h('span', { class: 'sub grow' }, 'YouTube · youtu.be/' + vid), h('div', { class: 'menuwrap' }, dots)),
+        h('a', { class: 'yt-screen', href: `https://youtu.be/${encodeURIComponent(vid)}`, target: '_blank', rel: 'noopener', 'aria-label': 'Open this video on YouTube' },
+          h('img', { src: youtubeThumbUrl(vid), alt: '' }), h('span', { class: 'yt-play', 'aria-hidden': 'true' }, '▶')),
+        h('div', { class: 'row screen-btns' }, studio, th));
+    };
     const screen = (which) => {
+      if (which === 'video' && isAudioItem() && item.youtubeId) return youtubeScreen();
       const mine = item.kind === which;
       const exists = mine || !!item.altKey;
       const label = which === 'audio' ? 'Audio' : 'Video';
@@ -875,7 +906,10 @@ async function existingView(first, nav) {
       // what shows on the greyed-out screen
       let overlay = [];
       if (!exists && which === 'video') {
-        overlay = [maker?.action, h('p', { class: 'small' }, maker?.note || ''), h('button', { class: 'linkbtn', type: 'button', onclick: () => runVersion(uploadVersion) }, 'or upload an MP4 file')];
+        overlay = [
+          h('button', { class: 'btn small primary', type: 'button', onclick: pickYoutube }, 'Pick from YouTube'),
+          h('p', { class: 'small' }, 'Make the video elsewhere and upload it to YouTube, then pick it here.'),
+          h('button', { class: 'linkbtn', type: 'button', onclick: () => runVersion(uploadVersion) }, 'or upload an MP4 file')];
       } else if (!exists) {
         const take = h('button', { class: 'btn small primary', type: 'button' }, 'Take the audio from the video');
         take.onclick = () => runVersion(() => makeAudioVersion(id), take);
@@ -893,7 +927,7 @@ async function existingView(first, nav) {
       if (!mine && exists) {
         const dots = h('button', { class: 'iconbtn', type: 'button', 'aria-label': `${label} version options` }, dotsIcon(20));
         const items = [];
-        if (maker?.ready) items.push({ label: 'Make the video again', onclick: () => maker.start() });
+        if (which === 'video') items.push({ label: 'Pick from YouTube instead', onclick: pickYoutube });
         items.push({ label: which === 'video' ? 'Replace with an MP4 file' : 'Replace with an audio file', onclick: () => runVersion(uploadVersion) });
         items.push({ label: `Remove ${label.toLowerCase()} version`, danger: true, onclick: () => runVersion(async () => { if (!confirm(`Remove the ${label.toLowerCase()} version?`)) return ''; await removeAlt(id); return ''; }) });
         dots.onclick = () => popMenu(dots, items);
@@ -905,7 +939,6 @@ async function existingView(first, nav) {
       return h('div', { class: 'screen' + (exists ? '' : ' off') },
         h('div', { class: 'screen-head' }, h('strong', {}, label), h('span', { class: 'sub grow' }, meta), corner),
         p.el,
-        which === 'video' && maker ? maker.status : null,
         h('div', { class: 'row screen-btns' }, dl, th));
     };
     put(screensBox, screen('audio'), screen('video'));
@@ -934,7 +967,7 @@ async function existingView(first, nav) {
     const go = () => { requestPublish(id, item.title); toast(navigator.onLine ? 'Publishing in the background. You can leave this page.' : 'Saved. It will publish when you are back online.'); };
     const buttons = [];
     if (!published()) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Publish'));
-    if (published() && item.needsRepublish) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Update and republish'));
+    if (published() && item.needsRepublish) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Update'));
     if (published()) buttons.push(h('button', { class: 'btn', type: 'button', onclick: guarded(async () => { await unpublishFlow(id); }) }, 'Unpublish'));
     put(actions,
       h('h3', {}, 'Publishing'),

@@ -10,6 +10,7 @@ import { h, fmtDur, fmtDate, extFor, toast, openModal } from './ui.js';
 import { LiveAudio, listInputs } from './live-audio.js';
 import { deck, listOutputs, canChooseOutput } from './console/deck.js';
 import { sourceControl, source } from './console/source.js';
+import { downloadName, extOf } from '../../shared/dl-name.js';
 import { readingPane } from './console/reading.js';
 import { engine } from './live-engine.js';
 
@@ -125,6 +126,17 @@ export async function bakerView({ poemId, nav }) {
     const time = h('span', { class: 'muted small rd-time' }, `0:00 / ${fmtDur(take.duration)}`);
     const badge = h('span', { class: 'badge' });
     const pubBtn = h('button', { class: 'btn primary small', type: 'button' }, 'Publish');
+    // The baked audio of the draft, saved to this computer (to make a video from it elsewhere).
+    const dlBtn = h('button', { class: 'btn small', type: 'button' }, 'Download');
+    dlBtn.onclick = async () => {
+      const row = await db.items.get(take.itemId);
+      const blob = row?.blob || take.blob;
+      if (!blob) return toast('The baked audio is not on this device.');
+      const url = URL.createObjectURL(blob);
+      const a = h('a', { href: url, download: downloadName(take.title, extOf({ key: row?.mediaKey || '', mime: row?.mime || blob.type })) });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    };
     const note = h('p', { class: 'small error bk-note' });
     takeUrl = URL.createObjectURL(take.blob);
     takeAudio = new Audio(takeUrl);
@@ -164,7 +176,7 @@ export async function bakerView({ poemId, nav }) {
       h('div', { class: 'row' }, h('b', { class: 'bk-title grow' }, take.title), badge),
       h('div', { class: 'small muted' }, `Baked audio, ${fmtDur(take.duration)}. Saved as a draft in Studio.`),
       h('div', { class: 'row rd-row' }, playBtn, time, h('div', { class: 'grow' }, seek)),
-      h('div', { class: 'row' }, pubBtn), note));
+      h('div', { class: 'row' }, pubBtn, dlBtn), note));
   }
 
   /* ----- recording: the soundcard's mixed sound, as it comes in ----- */

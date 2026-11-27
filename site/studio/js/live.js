@@ -1,4 +1,4 @@
-// The Live tab: your sessions, scheduling, the on-air console, and publishing the replay afterwards.
+// The Live tab: your sessions, scheduling, the on-air console, and the recap (history and downloads) afterwards.
 import { sb } from '../../shared/supabase.js';
 import { DEFAULT_SETTINGS, cleanSettings } from '../../shared/live-settings.js';
 import { db, uid, now } from './db.js';
@@ -107,13 +107,13 @@ export function liveStats({ views, peak, love, chats }) {
 const pickedLives = createSelection();   // Select mode of the Live list
 
 // Deletes lives for good: the public page, the chat, Love and viewer log (they go with the item), the files, and the
-// recording. Posts that were made from a recap are separate posts and stay.
+// recording.
 async function deleteLivesFlow(rows) {
   const todo = rows.filter((r) => r.state !== 'live');
   if (!todo.length) { toast('A live that is on air cannot be deleted. End it first.'); return false; }
   if (!navigator.onLine) throw new Error('This needs internet.');
   const n = todo.length;
-  if (!confirm(`Delete ${n === 1 ? 'this live' : `${n} lives`} completely?\nThe chat, viewer list, public page and the recording are removed for good. Posts you made from a recap stay.`)) return false;
+  if (!confirm(`Delete ${n === 1 ? 'this live' : `${n} lives`} completely?\nThe chat, viewer list, public page and the recording are removed for good.`)) return false;
   let done = 0;
   for (const r of todo) {
     try {
@@ -167,7 +167,7 @@ export async function liveListView(nav) {
       if (rows?.length) wrap.insertBefore(selBar.el, body);
       for (const r of rows || []) {
         const it = by.get(r.item_id) || {};
-        const label = r.state === 'live' ? 'On air' : r.state === 'ended' ? (it.public_media_key ? 'Replay published' : 'Ended') : r.starts_at ? `Planned ${new Date(r.starts_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : 'Not started';
+        const label = r.state === 'live' ? 'On air' : r.state === 'ended' ? 'Ended' : r.starts_at ? `Planned ${new Date(r.starts_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : 'Not started';
         const onAir = r.state === 'live';
         const box = pickedLives.on && !onAir ? tickBox(pickedLives.ids.has(r.item_id)) : null;
         const card = h('div', { class: 'live-card' + (pickedLives.on && pickedLives.ids.has(r.item_id) ? ' picked' : '') });
@@ -298,7 +298,6 @@ export async function liveConsoleView(itemId, nav) {
       const cap = st.captureId ? await db.captures.get(st.captureId) : null;
       recap = await recapPane({
         engine, itemId, cap, title: st.row.title,
-        published: async () => { const { data: item } = await sb.from('published_items').select('public_media_key').eq('id', itemId).single(); return !!item?.public_media_key; },
       });
       afterBox.replaceChildren(recap.el);
       recap.paint();

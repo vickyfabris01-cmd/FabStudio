@@ -1,6 +1,7 @@
 // YouTube in FabStudio. Read only, and nothing here touches the audio live.
 //   - youtubeButton / openYouTubeLibrary: your channel's uploads, shown on the Studio page. Publish puts one on
 //     Fabris Poet as a post that plays from YouTube.
+//   - pickYouTubeVideo: choose one video to link to an item (the Video slot on the item page).
 //   - liveCheckRow: the "Check YouTube live" button on the ready card before a live. YouTube is only asked when
 //     the button is pressed (one request), never in the background.
 import { CONFIG } from '../../shared/config.js';
@@ -142,6 +143,76 @@ export function openYouTubeLibrary({ onChange } = {}) {
     await showList(st.channelTitle);
   }
   load();
+}
+
+/* ---------- pick one video to link to an item (the Video slot on the item page) ---------- */
+// Videos that are already on the site, or already linked to another item, are not listed. onPick(video) is called with
+// { id, title, seconds } when one is chosen. exclude: YouTube ids that are linked on this device but not synced yet.
+export const youtubeStudioUrl = (id) => `https://studio.youtube.com/video/${encodeURIComponent(id)}/edit`;
+export const youtubeThumbUrl = (id) => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+
+export function pickYouTubeVideo({ exclude = [], onPick } = {}) {
+  const skip = new Set(exclude);
+  const body = h('div', { class: 'stack' }, h('p', { class: 'muted' }, 'Loading…'));
+  const done = h('button', { class: 'btn', type: 'button' }, 'Cancel');
+  const { close, box } = openModal(
+    h('h3', {}, 'Pick a YouTube video'),
+    h('p', { class: 'muted small' }, 'Choose the video that goes with this item. Listeners will be able to Watch it next to Listen. Videos that are already on the site are not listed.'),
+    body, h('div', { class: 'row', style: 'justify-content:flex-end' }, done));
+  box.classList.add('wide');
+  done.onclick = () => close();
+
+  const rowFor = (v) => {
+    const why = v.privacy === 'private' ? 'Private on YouTube. Make it Unlisted or Public first.'
+      : !v.embeddable ? 'Embedding is off. Turn on "Allow embedding" in YouTube Studio.'
+        : v.live && v.live !== 'none' ? 'This live has not finished yet.' : '';
+    const btn = h('button', { class: 'btn small' + (why ? '' : ' primary'), type: 'button', disabled: !!why }, 'Use this video');
+    btn.onclick = () => { close(); onPick?.({ id: v.id, title: v.title || '', seconds: v.seconds || 0 }); };
+    return h('li', { class: 'item yt-row' },
+      h('img', { class: 'thumb', src: v.thumb || youtubeThumbUrl(v.id), alt: '', loading: 'lazy' }),
+      h('div', { class: 'grow' }, h('div', { class: 'title' }, v.title || 'Untitled'),
+        h('div', { class: 'sub' }, [v.seconds ? fmtDur(v.seconds) : '', PRIVACY[v.privacy] || v.privacy].filter(Boolean).join(' · ')),
+        why ? h('div', { class: 'sub error' }, why) : null),
+      btn);
+  };
+
+  async function showList() {
+    const list = h('ul', { class: 'list yt-list' });
+    const more = h('button', { class: 'btn', type: 'button', hidden: true }, 'Load more');
+    const note = h('p', { class: 'small muted' });
+    body.replaceChildren(list, note, more);
+    let next = null; let busy = false;
+    const page = async () => {
+      if (busy) return;
+      busy = true; more.disabled = true; note.className = 'small muted'; note.textContent = 'Loading…';
+      try {
+        // a page can hold only videos that are already used: keep reading until something shows (or there is no more)
+        for (let tries = 0; tries < 6; tries++) {
+          const d = await ytVideos(next);
+          next = d.next;
+          for (const v of d.items) if (!v.itemId && !skip.has(v.id)) list.append(rowFor(v));
+          if (list.children.length >= 6 || !next) break;
+        }
+        note.textContent = list.children.length ? '' : 'No unused videos found. Videos already on the site or linked to another item are not listed.';
+      } catch (e) { note.className = 'small error'; note.textContent = e.message || 'Could not load your videos.'; }
+      busy = false; more.disabled = false; more.hidden = !next;
+    };
+    more.onclick = page;
+    await page();
+  }
+
+  (async () => {
+    let st;
+    try { st = await ytStatus(); } catch (e) { body.replaceChildren(h('p', { class: 'error' }, e.message || 'Could not reach the server.')); return; }
+    if (!st.configured) { body.replaceChildren(h('p', { class: 'error' }, 'YouTube is not set up on the Worker yet. Follow docs/YOUTUBE-UPDATE.md, then come back.')); return; }
+    if (!st.connected) {
+      body.replaceChildren(
+        h('p', {}, 'Connect your YouTube channel once. FabStudio gets read access only: it can see your videos and cannot change or delete anything on YouTube.'),
+        h('button', { class: 'btn primary', type: 'button', onclick: connectYouTube }, 'Connect YouTube'));
+      return;
+    }
+    await showList();
+  })();
 }
 
 /* ---------- the "Check YouTube live" row (the ready card, before going live) ---------- */

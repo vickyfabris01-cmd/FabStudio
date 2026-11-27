@@ -31,9 +31,9 @@ const VIDEO = '<path d="M15 10l4.553 -2.276a1 1 0 0 1 1.447 .894v6.764a1 1 0 0 1
 const PLAY = '<path d="M7 4v16l13 -8z"/>';
 const icon = (d) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return s.firstChild; };
 
-const embedUrl = (id) => `https://www.youtube.com/embed/${id}?${new URLSearchParams({ autoplay: '1', playsinline: '1', rel: '0', modestbranding: '1' })}`;
-const frame = (id, title) => h('iframe', {
-  src: embedUrl(id), title, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: true,
+const embedUrl = (id, start = 0) => `https://www.youtube.com/embed/${id}?${new URLSearchParams({ autoplay: '1', playsinline: '1', rel: '0', modestbranding: '1', ...(start > 0 ? { start: String(Math.floor(start)) } : {}) })}`;
+const frame = (id, title, start = 0) => h('iframe', {
+  src: embedUrl(id, start), title, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: true,
   referrerpolicy: 'strict-origin-when-cross-origin',
 });
 
@@ -83,9 +83,11 @@ export function liveVideo({ stage, onOpen, onClose }) {
 
 /* ---------- a post that comes from YouTube ---------- */
 // item: a row of items_public. isMember / requireAuth: the page's sign-in helpers (playing needs an account, as for any post).
-export function youtubePlayer(item, { thumbUrl = '', isMember, requireAuth }) {
+// start: the second to begin at. now: begin straight away (a member who was already listening and chose Watch).
+// note: false hides the data note (used when the video is the Watch side of an item that also has audio).
+export function youtubePlayer(item, { thumbUrl = '', isMember, requireAuth, start: from = 0, now = false, note = true }) {
   const slot = h('div', { class: 'yt-frame' });
-  const start = () => slot.replaceChildren(frame(item.youtube_id, item.title || 'Video'));
+  const start = () => slot.replaceChildren(frame(item.youtube_id, item.title || 'Video', from));
   const go = h('button', { class: 'yt-facade', type: 'button', 'aria-label': `Play ${item.title || 'video'}`, style: thumbUrl ? `background-image:url("${thumbUrl}")` : null },
     h('span', { class: 'yt-go' }, icon(PLAY)));
   go.onclick = () => {
@@ -93,6 +95,7 @@ export function youtubePlayer(item, { thumbUrl = '', isMember, requireAuth }) {
     requireAuth('watch').then((s) => { if (s) start(); });
   };
   slot.append(go);
-  const el = h('div', { class: 'yt-wrap player-wrap' }, slot, h('p', { class: 'yt-note' }, 'Plays from YouTube. Video uses more data than audio.'));
+  if (now && isMember()) start();
+  const el = h('div', { class: 'yt-wrap player-wrap' }, slot, note ? h('p', { class: 'yt-note' }, 'Plays from YouTube. Video uses more data than audio.') : null);
   return { el, media: () => null, play: () => Promise.resolve() };
 }

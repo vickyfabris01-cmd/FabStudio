@@ -210,7 +210,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 .foot-install[hidden] { display: none; }
 .ios-steps { margin: .4rem 0 1rem; padding-left: 1.2rem; line-height: 1.7; color: var(--muted); }
 
-/* Listen | Watch switch, animated screen, download choices, album */
+/* Listen | Watch switch, animated screen, download choices */
 .player-slot { display: block; }
 .modes { display: inline-flex; margin-top: .6rem; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
 .mode { font: inherit; font-size: .88rem; color: var(--muted); background: none; border: 0; padding: .45rem 1.1rem; min-height: 40px; cursor: pointer; }
@@ -223,21 +223,8 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 .dl-opt { display: flex; justify-content: space-between; align-items: center; gap: 1rem; text-decoration: none; }
 .dl-opt small { font-weight: 400; opacity: .8; }
 .dl-opt.off { background: var(--surface); color: var(--muted); border: 1px dashed var(--line); cursor: not-allowed; }
-.album { margin: 1rem 0 .4rem; padding: .8rem .9rem; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
-.album-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; margin-bottom: .4rem; }
-.album-tag { font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: .05rem .5rem; }
-.album-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.album-list a { display: flex; align-items: baseline; gap: .7rem; padding: .55rem .3rem; min-height: 44px; box-sizing: border-box; color: var(--text); text-decoration: none; border-top: 1px solid var(--line); }
-.album-list li:first-child a { border-top: 0; }
-.album-list .n { flex: 0 0 1.4rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.album-list .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.album-list li.now a { color: var(--accent); font-weight: 600; }
 
 /* Album card on the home page: a stack, so it reads as "more underneath" */
-.album-card { position: relative; margin-top: -12px; padding-top: 12px; display: flex; flex-direction: column; justify-content: flex-end; }
-.album-card::before { content: ''; position: absolute; top: 0; left: 9%; right: 9%; height: 12px; background: #3a3548; border-radius: 10px 10px 0 0; opacity: .75; }
-.album-card::after { content: ''; position: absolute; top: 6px; left: 4.5%; right: 4.5%; height: 12px; background: #4a4560; border-radius: 10px 10px 0 0; opacity: .9; }
-.album-card .pcard { position: relative; z-index: 1; }
 
 /* ---------- profile page ---------- */
 .profile #nameform { margin-top: 1.4rem; }
@@ -247,3 +234,10 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.6); }
 .pcard.danger { border-color: rgba(229,115,106,.45); }
 .danger-btn { color: var(--danger); border-color: rgba(229,115,106,.55); background: transparent; }
 .danger-btn:not(:disabled):hover { background: rgba(229,115,106,.12); }
+
+/* Footer: Follow Fabris (the channel links, see /js/footer-follow.js) */
+.foot-follow { flex: 0 0 100%; display: flex; align-items: center; justify-content: center; gap: .7rem; flex-wrap: wrap; padding: .2rem 0 .7rem; }
+.foot-follow b { flex: 0 0 100%; text-align: center; font-family: var(--serif); font-weight: 400; font-size: 1rem; color: var(--text); }
+.foot-follow a { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%; color: var(--text); background: var(--surface); border: 1px solid var(--line); }
+.foot-follow a:hover, .foot-follow a:focus-visible { color: var(--accent); border-color: var(--accent); }
+.foot-follow svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
