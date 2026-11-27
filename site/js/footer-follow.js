@@ -22,7 +22,7 @@ const CHANNELS = [
 
   { key: 'x',         label: 'X',                  url: '', icon: '<path d="M4 4l11.733 16h4.267l-11.733 -16z"/><path d="M4 20l6.768 -6.768m2.46 -2.46l6.772 -6.772"/>' },
 
-  { key: 'whatsapp',  label: 'WhatsApp channel',   url: 'Message Fab Studio on WhatsApp. https://wa.me/254742518050', icon: '<path d="M3 21l1.65 -3.8a9 9 0 1 1 3.4 2.9l-5.05 .9"/><path d="M9 10a.5 .5 0 0 0 1 0v-1a.5 .5 0 0 0 -1 0v1a5 5 0 0 0 5 5h1a.5 .5 0 0 0 0 -1h-1a.5 .5 0 0 0 0 1"/>' },
+  { key: 'whatsapp',  label: 'WhatsApp channel',   url: 'https://wa.me/254742518050', icon: '<path d="M3 21l1.65 -3.8a9 9 0 1 1 3.4 2.9l-5.05 .9"/><path d="M9 10a.5 .5 0 0 0 1 0v-1a.5 .5 0 0 0 -1 0v1a5 5 0 0 0 5 5h1a.5 .5 0 0 0 0 -1h-1a.5 .5 0 0 0 0 1"/>' },
 ];
 
 const NS = 'http://www.w3.org/2000/svg';
