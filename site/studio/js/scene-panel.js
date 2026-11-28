@@ -72,12 +72,10 @@ export function scenePanel(ctx) {
   pickBg.onclick = async () => {
     const r = await pickThumbnail({ imageOnly: true, heading: 'Background picture' });
     if (!r) return;
-    await db.items.update(id, { bgBlob: r.blob, bgKey: `thumbs/${id}.bg.jpg`, bgPending: 1, publicBgKey: null });
-    await update({ scene: { ...scene } }, true);
+    await update({ bgBlob: r.blob, bgKey: `thumbs/${id}.bg.jpg`, bgPending: 1, publicBgKey: null, scene: { ...scene } }, true);
   };
   const dropBg = item.bgKey ? h('button', { class: 'btn small danger', type: 'button', onclick: async () => {
-    await db.items.update(id, { bgBlob: undefined, bgKey: null, bgPending: 0, publicBgKey: null });
-    await update({ scene: { ...scene } }, true);
+    await update({ bgBlob: undefined, bgKey: null, bgPending: 0, publicBgKey: null, scene: { ...scene } }, true);
   } }, 'Remove background picture') : null;
 
   // ---------- use a frame as the thumbnail

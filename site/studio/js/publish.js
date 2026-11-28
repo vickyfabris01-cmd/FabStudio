@@ -2,7 +2,7 @@
 // Drafts are made offline. Publishing runs in the background (publisher.js) and carries on when you
 // leave the page. Unpublishing and deleting need internet.
 import { sb } from '../../shared/supabase.js';
-import { db, now } from './db.js';
+import { db, now, BASE_FIELDS } from './db.js';
 import { syncSoon, syncAndWait } from './sync.js';
 import { unpublishItem, deleteItemFiles, fetchMedia, deleteMedia } from './api.js';
 import { requestPublish, jobFor, isBusy, onPublishJobs } from './publisher.js';
@@ -176,6 +176,62 @@ export async function addAudioToYoutubePost(id, file) {
     allowDownload: row.allowDownload ?? allowDownloadDefault(),
     updatedAt: now(), dirty: 1, needsRepublish: 1,
   });
+  syncSoon();
+  return '';
+}
+
+// Replaces the item's own file (audio of an audio item, video of a video item) with another one. Returns an error text, or '' when done.
+export async function replaceMainFile(id, file) {
+  const row = await db.items.get(id);
+  if (!row) return 'That item is gone.';
+  if (ytOnly(row)) return 'This post plays from YouTube. Upload an audio file instead.';
+  const problem = await checkSource(file, row.kind === 'video' ? 'video' : 'audio');
+  if (problem) return problem;
+  const ext = extFor(file.type, file.name);
+  const key = `items/${id}.${ext}`;
+  if (row.mediaKey && row.mediaKey !== key && row.remote) { try { await deleteMedia(row.mediaKey); } catch { /* the old file stays unused */ } }
+  await db.items.update(id, {
+    blob: file, mime: file.type || (row.kind === 'video' ? 'video/mp4' : 'audio/mpeg'), duration: await probeDuration(file),
+    mediaKey: key, mediaPending: 1, bakeId: null,   // a later re-bake must not overwrite the file that was chosen here
+    updatedAt: now(), dirty: 1, ...(row.status === 'published' ? { needsRepublish: 1 } : {}),
+  });
+  syncSoon();
+  return '';
+}
+
+// Undo for a published item: every change that waits for Update (files, thumbnail, screen settings) goes back to what the
+// public page has now. The published files are read from the public bucket, because a replaced file may already have
+// overwritten the private copy. Returns an error text, or '' when done.
+export async function undoChanges(id) {
+  const row = await db.items.get(id);
+  const base = row?.baseline;
+  if (!row || !base) return 'There is nothing to undo.';
+  if (!navigator.onLine) return 'Undo needs internet, to bring back the published files.';
+  const SLOT = {
+    blob: { key: 'mediaKey', pub: 'publicMediaKey', pending: 'mediaPending' },
+    thumbBlob: { key: 'thumbKey', pub: 'publicThumbKey', pending: 'thumbPending' },
+    altBlob: { key: 'altKey', pub: 'publicAltKey', pending: 'altPending' },
+    bgBlob: { key: 'bgKey', pub: 'publicBgKey', pending: 'bgPending' },
+  };
+  const patch = {};
+  for (const f of BASE_FIELDS) patch[f] = base[f] ?? null;
+  const stale = [];
+  // read everything first, so a failure leaves the item as it was
+  for (const name of base.slots || []) {
+    const s = SLOT[name];
+    if (!s) continue;
+    if (row[s.key] && row[s.key] !== base[s.key]) stale.push(row[s.key]);
+    if (base[s.key] && base[s.pub]) {
+      let blob = null;
+      try { const r = await fetch(publicUrl(base[s.pub])); if (r.ok) blob = await r.blob(); } catch { /* handled below */ }
+      if (!blob) return 'The published file could not be read. Check your internet and try again.';
+      patch[name] = blob; patch[s.pending] = 1;     // it is put back in the private bucket, over whatever was uploaded
+    } else {
+      patch[name] = undefined; patch[s.pending] = 0;
+    }
+  }
+  await db.items.update(id, { ...patch, baseline: null, needsRepublish: 0, updatedAt: now(), dirty: 1 });
+  if (row.remote) for (const k of stale) { try { await deleteMedia(k); } catch { /* ignore */ } }
   syncSoon();
   return '';
 }
@@ -978,6 +1034,21 @@ async function existingView(first, nav) {
       // the corner: the pen opens Screen settings; the dots hold Replace and Remove
       const corner = [];
       if (which === 'audio' && isAudioItem()) corner.push(h('button', { class: 'iconbtn accent', type: 'button', 'aria-label': 'Screen settings', onclick: goToSettings }, pencilIcon(18)));
+      if (mine && exists) {
+        // the item's own file can be replaced too (a wrong upload); the file chosen goes live only after Update, and Undo changes brings the old one back
+        const dots = h('button', { class: 'iconbtn', type: 'button', 'aria-label': `${label} options` }, dotsIcon(20));
+        dots.onclick = () => popMenu(dots, [{ label: `Replace ${label.toLowerCase()} file`, onclick: async () => {
+          const file = await pickFile(item.kind === 'video' ? 'video/mp4' : 'audio/*');
+          if (!file) return;
+          try {
+            const problem = await replaceMainFile(id, file);
+            if (problem) return toast(problem);
+            toast(published() ? 'File replaced. Press Update to put it on the public page, or Undo changes.' : 'File replaced.');
+            nav.refresh();
+          } catch (e) { toast(e.message || String(e)); }
+        } }]);
+        corner.push(h('div', { class: 'menuwrap' }, dots));
+      }
       if (!mine && exists) {
         const dots = h('button', { class: 'iconbtn', type: 'button', 'aria-label': `${label} version options` }, dotsIcon(20));
         const items = [];
@@ -1022,6 +1093,11 @@ async function existingView(first, nav) {
     const buttons = [];
     if (!fromYt() && !published()) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Publish'));
     if (!fromYt() && published() && item.needsRepublish) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Update'));
+    if (published() && item.needsRepublish && item.baseline) buttons.push(h('button', { class: 'btn', type: 'button', onclick: guarded(async () => {
+      if (!confirm('Undo the changes that are not on the public page yet?\nFiles, thumbnail and screen settings go back to what is public now. Title, description and the switches below are not touched.')) return;
+      const problem = await undoChanges(id);
+      toast(problem || 'Changes undone.');
+    }) }, 'Undo changes'));
     if (!fromYt() && published()) buttons.push(h('button', { class: 'btn', type: 'button', onclick: guarded(async () => { await unpublishFlow(id); }) }, 'Unpublish'));
     put(actions,
       h('h3', {}, 'Publishing'),
