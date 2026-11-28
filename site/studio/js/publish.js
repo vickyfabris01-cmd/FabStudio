@@ -343,8 +343,11 @@ export async function publishListView(nav) {
       onclick: (e) => {
         e.stopPropagation();
         popMenu(dots, [
-          // a post that plays from YouTube has no file of its own: it opens its public page, and leaves the site with Delete
-          ...(ytOnly(r) ? [{ label: 'Open page', onclick: () => window.open(`/poem/?id=${r.id}`, '_blank') }] : [
+          // a post that plays from YouTube has no file of its own: Edit opens its Studio page, View public page opens the site, and it leaves the site with Delete
+          ...(ytOnly(r) ? [
+            { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
+            { label: 'View public page', onclick: () => window.open(`/poem/?id=${r.id}`, '_blank') },
+          ] : [
             { label: 'Edit', onclick: () => { editNext = r.id; nav.open(r.id); } },
             { label: 'Open', onclick: () => nav.open(r.id) },
             { label: 'Download', onclick: () => act(() => downloadItem(r.id)) },
@@ -394,7 +397,7 @@ export async function publishListView(nav) {
     }
     const box = picked.on ? tickBox(picked.ids.has(r.id)) : null;
     const li = h('li', { class: 'item' + (picked.on && picked.ids.has(r.id) ? ' picked' : ''), onclick: () => {
-      if (!picked.on) return ytOnly(r) ? window.open(`/poem/?id=${r.id}`, '_blank') : nav.open(r.id);
+      if (!picked.on) return nav.open(r.id);
       if (picked.ids.has(r.id)) picked.ids.delete(r.id); else picked.ids.add(r.id);
       box.checked = picked.ids.has(r.id); li.classList.toggle('picked', box.checked); selBar.paint();
     } }, box, thumb, body, end);
@@ -640,6 +643,7 @@ async function existingView(first, nav) {
   const put = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false));
   const penBtn = (label, onclick) => h('button', { class: 'iconbtn accent', type: 'button', 'aria-label': label, onclick }, pencilIcon(18));
   const published = () => item.status === 'published';
+  const fromYt = () => ytOnly(item);   // plays from YouTube: no file of its own, so no file actions
 
   /* title */
   const titleText = h('h2', { class: 'item-title' });
@@ -653,6 +657,7 @@ async function existingView(first, nav) {
     const patch = { title: t, updatedAt: now(), dirty: 1 };
     // The thumbnail card shows the title, so it is redrawn with it. Pictures you chose yourself stay.
     let kind = item.thumbKind;
+    if (fromYt()) { await db.items.update(id, { title: t, updatedAt: now(), dirty: 1 }); item = await db.items.get(id); syncSoon(); showTitle(); paintStatus(); toast('Saved.'); return; }
     if (!kind) kind = confirm('Also update the thumbnail card to show the new title?\nChoose Cancel to keep the current picture.') ? 'title' : 'custom';
     if (kind === 'title') {
       patch.thumbBlob = await thumbFromTitle(t, 'Fabris Poet', item.thumbVariant || 0);
@@ -699,7 +704,7 @@ async function existingView(first, nav) {
     const m = openModal(h('h3', {}, 'Edit'),
       h('label', {}, h('span', { class: 'muted small' }, 'Title'), ti),
       h('label', {}, h('span', { class: 'muted small' }, 'Description'), ta),
-      h('div', { class: 'row' }, thumbBtn),
+      fromYt() ? null : h('div', { class: 'row' }, thumbBtn),
       h('div', { class: 'row' }, h('span', { class: 'grow' }), cancel, save));
     cancel.onclick = () => m.close();
     save.onclick = async () => {
@@ -881,7 +886,7 @@ async function existingView(first, nav) {
     const youtubeScreen = () => {
       const vid = item.youtubeId;
       const dots = h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Video options' }, dotsIcon(20));
-      dots.onclick = () => popMenu(dots, [
+      if (!fromYt()) dots.onclick = () => popMenu(dots, [
         { label: 'Pick another YouTube video', onclick: pickYoutube },
         { label: 'Replace with an MP4 file', onclick: () => runVersion(uploadVersion) },
         { label: 'Remove video', danger: true, onclick: () => runVersion(async () => { if (!confirm('Remove the linked YouTube video from this item? The video stays on YouTube.')) return ''; await unlinkYoutube(id); return ''; }) },
@@ -889,12 +894,18 @@ async function existingView(first, nav) {
       const th = h('button', { class: 'btn small', type: 'button', onclick: editThumb }, 'Edit thumbnail');
       const studio = h('button', { class: 'btn small', type: 'button', onclick: () => window.open(youtubeStudioUrl(vid), '_blank', 'noopener') }, 'Open in YouTube Studio');
       return h('div', { class: 'screen' },
-        h('div', { class: 'screen-head' }, h('strong', {}, 'Video'), h('span', { class: 'sub grow' }, 'YouTube · youtu.be/' + vid), h('div', { class: 'menuwrap' }, dots)),
+        h('div', { class: 'screen-head' }, h('strong', {}, 'Video'), h('span', { class: 'sub grow' }, 'YouTube · youtu.be/' + vid), fromYt() ? null : h('div', { class: 'menuwrap' }, dots)),
         h('a', { class: 'yt-screen', href: `https://youtu.be/${encodeURIComponent(vid)}`, target: '_blank', rel: 'noopener', 'aria-label': 'Open this video on YouTube' },
           h('img', { src: youtubeThumbUrl(vid), alt: '' }), h('span', { class: 'yt-play', 'aria-hidden': 'true' }, '▶')),
-        h('div', { class: 'row screen-btns' }, studio, th));
+        h('div', { class: 'row screen-btns' }, studio, fromYt() ? null : th));
     };
     const screen = (which) => {
+      if (fromYt()) {
+        if (which === 'video') return youtubeScreen();
+        return h('div', { class: 'screen off' },
+          h('div', { class: 'screen-head' }, h('strong', {}, 'Audio'), h('span', { class: 'sub grow' }, 'Not available')),
+          h('div', { class: 'cover-wrap off' }, h('div', { class: 'cover ph' }), h('div', { class: 'cover-off' }, h('p', { class: 'small' }, 'This post plays from YouTube, so it has no audio file of its own.'))));
+      }
       if (which === 'video' && isAudioItem() && item.youtubeId) return youtubeScreen();
       const mine = item.kind === which;
       const exists = mine || !!item.altKey;
@@ -966,14 +977,14 @@ async function existingView(first, nav) {
   function paintActions() {
     const go = () => { requestPublish(id, item.title); toast(navigator.onLine ? 'Publishing in the background. You can leave this page.' : 'Saved. It will publish when you are back online.'); };
     const buttons = [];
-    if (!published()) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Publish'));
-    if (published() && item.needsRepublish) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Update'));
-    if (published()) buttons.push(h('button', { class: 'btn', type: 'button', onclick: guarded(async () => { await unpublishFlow(id); }) }, 'Unpublish'));
+    if (!fromYt() && !published()) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Publish'));
+    if (!fromYt() && published() && item.needsRepublish) buttons.push(h('button', { class: 'btn primary', type: 'button', onclick: guarded(async () => go()) }, 'Update'));
+    if (!fromYt() && published()) buttons.push(h('button', { class: 'btn', type: 'button', onclick: guarded(async () => { await unpublishFlow(id); }) }, 'Unpublish'));
     put(actions,
       h('h3', {}, 'Publishing'),
       flag('Allow comments', 'commentsEnabled'),
       flag('Allow reactions', 'reactionsEnabled'),
-      flag('Allow download', 'allowDownload'),
+      fromYt() ? null : flag('Allow download', 'allowDownload'),
       published() && item.needsRepublish ? h('p', { class: 'muted small' }, 'Something changed (thumbnail or a version). Update to show it on the public page.') : null,
       !busy && (item.mediaPending || item.thumbPending || item.altPending || item.bgPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
       busy ? null : h('div', { class: 'stack' }, buttons));
