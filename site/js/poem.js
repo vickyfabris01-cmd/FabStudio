@@ -421,22 +421,36 @@ async function main() {
   function openDownload() {
     const close = () => { document.removeEventListener('keydown', onKey); wrap.remove(); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const opt = (label, key) => {
-      if (!key) return h('span', { class: 'btn-go dl-opt off', 'aria-disabled': 'true' }, label, h('small', {}, 'Not available yet'));
+    const fileOf = (key) => {
       const name = downloadName(item.title, extOf({ key }));
       const url = data.mediaUrl(key);
-      return h('a', { class: 'btn-go dl-opt', href: `${url}${url.includes('?') ? '&' : '?'}download=${encodeURIComponent(name)}`, download: name, onclick: () => setTimeout(close, 400) },
+      return { name, href: `${url}${url.includes('?') ? '&' : '?'}download=${encodeURIComponent(name)}` };
+    };
+    const opt = (label, key, missing = 'Not available yet') => {
+      if (!key) return h('span', { class: 'btn-go dl-opt off', 'aria-disabled': 'true' }, label, h('small', {}, missing));
+      const f = fileOf(key);
+      return h('a', { class: 'btn-go dl-opt', href: f.href, download: f.name, onclick: () => setTimeout(close, 400) },
         label, h('small', {}, extOf({ key }).toUpperCase()));
     };
+    // both files: the browser is asked for one, then the other (it may ask once to allow several downloads)
+    const bothOpt = audioKey && videoKey ? h('button', { class: 'btn-go dl-opt', type: 'button', onclick: () => {
+      [audioKey, videoKey].forEach((key, i) => setTimeout(() => {
+        const f = fileOf(key);
+        const a = h('a', { href: f.href, download: f.name });
+        document.body.append(a); a.click(); a.remove();
+      }, i * 700));
+      setTimeout(close, 1500);
+    } }, 'Both', h('small', {}, 'Audio and video')) : null;
     const wrap = h('div', { class: 'invite', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Download', onclick: (e) => { if (e.target === wrap) close(); } },
       h('div', { class: 'invite-box' },
         h('button', { class: 'invite-x', type: 'button', 'aria-label': 'Close', onclick: close }, '×'),
         h('h2', {}, 'Download'),
-        h('div', { class: 'dl-opts' }, opt('Audio', audioKey), opt('Video', videoKey))));
+        h('div', { class: 'dl-opts' }, opt('Audio', audioKey), opt('Video', videoKey, ytWatch ? 'On YouTube only' : 'Not available yet'), bothOpt)));
     document.addEventListener('keydown', onKey);
     document.body.append(wrap);
   }
-  const dlBtn = item.allow_download === false || ytOnlyPost ? null
+  // shown whenever downloads are allowed and at least one file can be downloaded (a YouTube video cannot be)
+  const dlBtn = item.allow_download === false || !(audioKey || videoKey) ? null
     : h('button', { class: 'react dl', type: 'button', 'aria-label': 'Download', title: 'Download', onclick: openDownload }, icon('download'));
 
   const titleText = h('h1', {}, item.title);

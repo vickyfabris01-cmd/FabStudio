@@ -151,6 +151,35 @@ export async function unlinkYoutube(id) {
   syncSoon();
 }
 
+// A post that only plays from YouTube gets its own audio file: it becomes an audio item whose Watch side is the
+// YouTube video (the same shape as any audio item with a linked YouTube video). The public page changes when Update is pressed.
+// Returns an error text, or '' when done.
+export async function addAudioToYoutubePost(id, file) {
+  const row = await db.items.get(id);
+  if (!row) return 'That item is gone.';
+  if (!ytOnly(row)) return 'This item already has its own file.';
+  const problem = await checkSource(file, 'audio');
+  if (problem) return problem;
+  const ext = extFor(file.type, file.name);
+  const mime = file.type || 'audio/mpeg';
+  // the picture stays the one it has on the public page; when that cannot be read, a card with the title is made
+  let thumb = null;
+  let thumbKind = 'custom';
+  try {
+    if (row.publicThumbKey) { const r = await fetch(publicUrl(row.publicThumbKey)); if (r.ok) thumb = await r.blob(); }
+  } catch { /* the title card below is used */ }
+  if (!thumb || !thumb.size) { thumb = await thumbFromTitle(row.title || 'Untitled'); thumbKind = 'title'; }
+  await db.items.update(id, {
+    kind: 'audio', mime, blob: file, duration: await probeDuration(file),
+    mediaKey: `items/${id}.${ext}`, mediaPending: 1,
+    thumbKey: `thumbs/${id}.jpg`, thumbBlob: thumb, thumbPending: 1, thumbKind,
+    allowDownload: row.allowDownload ?? allowDownloadDefault(),
+    updatedAt: now(), dirty: 1, needsRepublish: 1,
+  });
+  syncSoon();
+  return '';
+}
+
 // Takes the second version away (the file is deleted online too).
 export async function removeAlt(id) {
   const row = await db.items.get(id);
@@ -902,9 +931,23 @@ async function existingView(first, nav) {
     const screen = (which) => {
       if (fromYt()) {
         if (which === 'video') return youtubeScreen();
+        const up = h('button', { class: 'btn small primary', type: 'button' }, 'Upload an audio file');
+        up.onclick = async () => {
+          const file = await pickFile('audio/*');
+          if (!file) return;
+          up.disabled = true;
+          try {
+            const problem = await addAudioToYoutubePost(id, file);
+            if (problem) { toast(problem); up.disabled = false; return; }
+            toast('Audio added. Press Update to put it on the public page.');
+            nav.refresh();
+          } catch (e) { toast(e.message || String(e)); up.disabled = false; }
+        };
         return h('div', { class: 'screen off' },
-          h('div', { class: 'screen-head' }, h('strong', {}, 'Audio'), h('span', { class: 'sub grow' }, 'Not available')),
-          h('div', { class: 'cover-wrap off' }, h('div', { class: 'cover ph' }), h('div', { class: 'cover-off' }, h('p', { class: 'small' }, 'This post plays from YouTube, so it has no audio file of its own.'))));
+          h('div', { class: 'screen-head' }, h('strong', {}, 'Audio'), h('span', { class: 'sub grow' }, 'Not made yet')),
+          h('div', { class: 'cover-wrap off' }, h('div', { class: 'cover ph' }),
+            h('div', { class: 'cover-off' }, up, h('p', { class: 'small' }, 'The video stays on YouTube. The audio is saved here, so it can be downloaded when you allow it.'))),
+          h('div', { class: 'row screen-btns' }, h('button', { class: 'btn small', type: 'button', disabled: true }, 'Download')));
       }
       if (which === 'video' && isAudioItem() && item.youtubeId) return youtubeScreen();
       const mine = item.kind === which;
@@ -984,7 +1027,7 @@ async function existingView(first, nav) {
       h('h3', {}, 'Publishing'),
       flag('Allow comments', 'commentsEnabled'),
       flag('Allow reactions', 'reactionsEnabled'),
-      fromYt() ? null : flag('Allow download', 'allowDownload'),
+      flag('Allow download', 'allowDownload'),
       published() && item.needsRepublish ? h('p', { class: 'muted small' }, 'Something changed (thumbnail or a version). Update to show it on the public page.') : null,
       !busy && (item.mediaPending || item.thumbPending || item.altPending || item.bgPending) ? h('p', { class: 'muted small' }, 'Files are waiting to upload.') : null,
       busy ? null : h('div', { class: 'stack' }, buttons));
